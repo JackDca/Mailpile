@@ -48,6 +48,7 @@ _plugins.register_config_section('tags', ["Tags", {
     'icon': ['URL to default tag icon', 'str', 'icon-tag'],
     'label': ['Display as label in results', 'bool', True],
     'label_color': ['Color to use in label', 'str', '#4D4D4D'],
+    'toolbar': ['Display in selection toolbar', 'bool', False],
     'display': ['Display context in UI', ['priority', 'tag', 'subtag',
                                           'archive', 'invisible'], 'tag'],
     'display_order': ['Order in lists', 'float', 0],
@@ -116,6 +117,7 @@ def FilterDelete(cfg, *filter_ids):
 
 def GetTags(cfg, tn=None, default=None, **kwargs):
     results = []
+    tv = None
     if tn is not None:
         #
         # Hack, allow the tn= to be any of: TID, name or slug.
@@ -137,7 +139,7 @@ def GetTags(cfg, tn=None, default=None, **kwargs):
             results.append(tags)
 
     if kwargs:
-        tv = cfg.tags.values()
+        tv = tv or cfg.tags.values()
         for kw in kwargs:
             want = kwargs[kw]
             if not isinstance(want, (list, tuple)):
@@ -146,9 +148,12 @@ def GetTags(cfg, tn=None, default=None, **kwargs):
             if kw == 'tid':
                 results.append([str(k) for k in want if str(k) in cfg.tags])
             else:
-                results.append([t._key for t in tv
-                                if ('*' in want or
-                                    unicode(t[kw]).lower() in want)])
+                want = set(want)
+                if '*' in want:
+                    results.append(cfg.tags.keys())
+                else:
+                    results.append([t._key for t in tv
+                                    if (unicode(t[kw]).lower() in want)])
 
     if (tn or kwargs) and not results:
         return default
@@ -299,8 +304,25 @@ class Tag(TagCommand):
                     conversations = True if (op[:3] == '--c') else False
                 else:
                     ops.append(op)
+
+        # Allow ops that select tags by attribute instead of slug/id/name
+        expanded_ops = []
+        for op in ops:
+            if ':' in op:
+                sign = op[:1]
+                tvar, tval = op[1:].split(':', 1)
+                expanded_ops.extend('%s%s' % (sign, tag._key)
+                    for tag in self.session.config.get_tags(**{tvar: tval}))
+            else:
+                expanded_ops.append(op)
+
+        # Make op list unique and sort so removals happen first
+        expanded_ops = list(set(expanded_ops))
+        expanded_ops.sort(key=lambda k:
+            ({'-': 1, '+': 2}.get(k[:1], 8), k))
+
         msg_ids = self._choose_messages(words)
-        return ops, msg_ids, conversations
+        return expanded_ops, msg_ids, conversations
 
     def _do_tagging(self, ops, msg_ids, conversations, save=True, auto=False):
         idx = self._idx()
