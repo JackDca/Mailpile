@@ -16,8 +16,6 @@ RUN apt-get update && \
                            debhelper \
                            devscripts \
                            equivs \
-  chromedriver chromium chromium-driver fontconfig fontconfig-config \
-  fonts-dejavu-core fonts-liberation gnome-icon-theme gtk-update-icon-cache \
   libjs-animate.css libjs-autosize libjs-bootstrap libjs-dompurify \
   libjs-favico.js libjs-jquery libjs-jquery-slugify libjs-jquery-timer \
   libjs-jquery-ui libjs-jquery-ui-touch-punch libjs-less-elements \
@@ -27,21 +25,20 @@ RUN apt-get update && \
   python-jinja2 python-lockfile python-lxml python-markupsafe \
   python-mock python-nose python-olefile python-pbr python-pgpdump \
   python-pil python-selenium python-setuptools python-webencodings \
-  python-socksipychain \
-  spambayes va-driver-all vdpau-driver-all window-size x11-common x11-utils \
-  x11-xserver-utils xdg-utils
+  python-socksipychain spambayes xdg-utils
 
 RUN mkdir /root/mailpile /mnt/dist
 COPY packages/debian /root/mailpile/debian
+COPY dist/version.txt /root/mailpile-version.txt
 VOLUME /mnt/dist
 
-RUN ln -s /mnt/dist/mailpile.tar.gz /root/mailpile_0.0~git$(date +'%Y%m%d').orig.tar.gz
-RUN sed -i "s|<-- version -->|0.0~git$(date +'%Y%m%d')-1|" /root/mailpile/debian/changelog
+RUN ln -s /mnt/dist/mailpile.tar.gz /root/mailpile_$(cat /root/mailpile-version.txt).orig.tar.gz
+RUN sed -i "s|<-- version -->|$(cat /root/mailpile-version.txt)-1|" /root/mailpile/debian/changelog
 
 RUN mk-build-deps --install /root/mailpile/debian/control --tool "apt-get --force-yes -y"
 
 WORKDIR /root/mailpile
 ENV DESTINATION_DPKG_DIR /mnt/dist
-CMD tar xvf ../mailpile_0.0~git$(date +'%Y%m%d').orig.tar.gz -C ./ \
+CMD tar xvf ../mailpile_$(cat /root/mailpile-version.txt).orig.tar.gz -C ./ \
     && dpkg-buildpackage -us -uc -b \
     && cp ../*.deb /mnt/dist

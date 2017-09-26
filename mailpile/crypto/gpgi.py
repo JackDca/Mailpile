@@ -28,7 +28,8 @@ _ = lambda s: s
 
 DEFAULT_KEYSERVERS = ["hkps://hkps.pool.sks-keyservers.net",
                       "hkp://subset.pool.sks-keyservers.net"]
-DEFAULT_KEYSERVER_OPTIONS = ['ca-cert-file=%s' % __file__]
+DEFAULT_KEYSERVER_OPTIONS = [
+  'ca-cert-file=%s' % __file__.replace('.pyc', '.py')]
 
 GPG_KEYID_LENGTH = 8
 GNUPG_HOMEDIR = None  # None=use what gpg uses
@@ -49,6 +50,7 @@ openpgp_algorithms = {1: _("RSA"),
 # For details on type 20 compromisation, see
 # http://lists.gnupg.org/pipermail/gnupg-announce/2003q4/000160.html
 
+ENTROPY_LOCK = threading.Lock()
 
 class GnuPGEventUpdater:
     """
@@ -1252,6 +1254,10 @@ class GnuPG:
 
         return retvals
 
+    def delete_key(self, key_fingerprint):
+        cmd = ['--yes', '--delete-secret-and-public-key', key_fingerprint]
+        return self.run(cmd)
+
     def recv_key(self, keyid,
                  keyservers=DEFAULT_KEYSERVERS,
                  keyserver_options=DEFAULT_KEYSERVER_OPTIONS):
@@ -1368,7 +1374,7 @@ class GnuPG:
             self.debug('Running %s' % ' '.join(gpg_args))
             self.event.update_args(gpg_args)
             proc = Popen(gpg_args, stdin=PIPE, stdout=PIPE, stderr=PIPE,
-                         bufsize=0)
+                         bufsize=0, long_running=True)
 
             return callback(proc, *args, **kwargs)
         finally:
@@ -1612,6 +1618,7 @@ class GnuPGExpectScript(threading.Thread):
 
 class GnuPGBaseKeyGenerator(GnuPGExpectScript):
     """This is a background thread which generates a new PGP key."""
+    AWAITING_LOCK = 'Pending keygen'
     KEY_SETUP = 'Key Setup'
     GATHER_ENTROPY = 'Creating key'
     CREATED_KEY = 'Created key'
@@ -1625,18 +1632,30 @@ class GnuPGBaseKeyGenerator(GnuPGExpectScript):
         'passphrase': 'mailpile'}
     DESCRIPTION = _('Creating a %(bits)s bit GnuPG key')
     RUNNING_STATES = (GnuPGExpectScript.RUNNING_STATES +
-                      [KEY_SETUP, GATHER_ENTROPY, HAVE_KEY])
+                      [AWAITING_LOCK, KEY_SETUP, GATHER_ENTROPY, HAVE_KEY])
 
     failed = property(lambda self: (not self.running and
                                     not self.generated_key))
 
     def __init__(self, *args, **kwargs):
-        GnuPGExpectScript.__init__(self, *args, **kwargs)
+        super(GnuPGBaseKeyGenerator, self).__init__(*args, **kwargs)
         self.generated_key = None
 
     def in_state(self, state):
         if state == self.HAVE_KEY:
              self.generated_key = self.before.strip().split()[-1]
+
+    def run(self):
+        # In order to minimize risk of timeout during key generation (due to
+        # lack of entropy), we serialize them here using a global lock
+        self.set_state(self.AWAITING_LOCK)
+        self.event.message = _('Waiting to generate a %d bit GnuPG key.'
+                               % self.variables['bits'])
+        with ENTROPY_LOCK:
+            self.event.data['keygen_gotlock'] = 1
+            self.event.message = _('Generating new %d bit PGP key.'
+                                   % self.variables['bits'])
+            super(GnuPGBaseKeyGenerator, self).run()
 
 
 class GnuPG14KeyGenerator(GnuPGBaseKeyGenerator):
@@ -1657,7 +1676,7 @@ class GnuPG14KeyGenerator(GnuPGBaseKeyGenerator):
         ('GET_LINE keygen.comment',     '%(comment)s',   -1, None),
         ('GET_HIDDEN passphrase',    '%(passphrase)s',   -1, None),
         ('GOT_IT',                               None,   -1, B.GATHER_ENTROPY),
-        ('KEY_CREATED',                          None, 1800, B.CREATED_KEY),
+        ('KEY_CREATED',                          None, 7200, B.CREATED_KEY),
         ('\n',                                   None,   -1, B.HAVE_KEY)]
 
     def gpg_args(self):

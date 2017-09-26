@@ -297,7 +297,7 @@ class SetupMagic(Command):
             session.ui.notify(_('Enabling Libravatar image importer'))
 
         gpg_home = os.path.expanduser('~/.gnupg')
-        if os.path.exists(gpg_home) and not vcard_importers.gpg:
+        if not vcard_importers.gpg:
             vcard_importers.gpg.append({'active': True,
                                         'gpg_home': gpg_home})
             session.ui.notify(_('Importing contacts from GPG keyring'))
@@ -318,6 +318,12 @@ class SetupMagic(Command):
         if save_and_update_workers:
             session.config.save()
             session.config.prepare_workers(session, daemons=want_daemons)
+
+        # Scan GnuPG keychain in background
+        from mailpile.plugins.vcard_gnupg import PGPKeysImportAsVCards
+        session.config.slow_worker.add_unique_task(
+            session, 'initialpgpkeyimport',
+            lambda: PGPKeysImportAsVCards(session).run())
 
         # Enable Tor in the background, if we have it...
         session.config.slow_worker.add_unique_task(

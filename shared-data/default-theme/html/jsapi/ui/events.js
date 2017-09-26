@@ -65,7 +65,6 @@ $(document).on('click', 'a.show-hide, a.do-show', function(e) {
 
 // FIXME: this is in the wrong place
 Mailpile.auto_modal_display = function(jhtml_url, params, modal, data) {
-  Mailpile.UI.hide_modal();
   var mf = Mailpile.UI.show_modal(modal({
     data: data,
     icon: params.icon,
@@ -106,8 +105,7 @@ Mailpile.auto_modal_display = function(jhtml_url, params, modal, data) {
       }
       var post_data = mf.find('form').serialize();
 
-      loadtimer = setTimeout(function() {
-        Mailpile.UI.hide_modal();
+      var loadtimer = setTimeout(function() {
         Mailpile.UI.show_modal(
           Mailpile.safe_template($('#template-modal-loading').html())
         );
@@ -134,8 +132,7 @@ Mailpile.auto_modal_display = function(jhtml_url, params, modal, data) {
 };
 
 Mailpile.auto_modal = function(params) {
-  Mailpile.UI.hide_modal();
-  loadtimer = setTimeout(function() {
+  var loadtimer = setTimeout(function() {
     Mailpile.UI.show_modal(
       Mailpile.safe_template($('#template-modal-loading').html())
     );
@@ -154,11 +151,13 @@ Mailpile.auto_modal = function(params) {
       type: params.method,
       data: post_data,
       success: function(data) {
+        console.log("AM: Success!");
         clearTimeout(loadtimer);
         Mailpile.auto_modal_display(jhtml_url, params, modal, data);
       },
       error: function(xhr, status, error) {
         // FIXME: This is a bit lame...
+        console.log("AM: Error: " + status);
         clearTimeout(loadtimer);
         Mailpile.UI.hide_modal();
       }
@@ -166,6 +165,10 @@ Mailpile.auto_modal = function(params) {
   }, undefined, params.flags, 'Unsafe');
 };
 
+
+$(document).on('click', '.modal-backdrop', function(e) {
+  Mailpile.UI.hide_modal();
+});
 
 $(document).on('click', '.auto-modal', function(e) {
   var elem = $(this);

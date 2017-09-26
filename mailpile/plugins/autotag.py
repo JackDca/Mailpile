@@ -8,6 +8,7 @@ import math
 import time
 import datetime
 
+import mailpile.util
 from mailpile.commands import Command
 from mailpile.config.base import ConfigDict
 from mailpile.i18n import gettext as _
@@ -24,6 +25,8 @@ _plugins = PluginManager(builtin=__file__)
 
 TAGGERS = {}
 TRAINERS = {}
+
+AUTO_TAG_DISABLED = (None, False, '', 'off', 'false', 'fancy', 'builtin')
 
 AUTO_TAG_CONFIG = {
     'match_tag': ['Tag we are adding to automatically', str, ''],
@@ -56,9 +59,9 @@ def autotag_configs(config):
         return
 
     for tid, tag_info in config.tags.iteritems():
-        auto_tagging = tag_info.auto_tag
+        auto_tagging = (tag_info.auto_tag or '')
         if (tid not in done and
-                auto_tagging.lower() not in ('', 'off', 'false')):
+                auto_tagging.lower() not in AUTO_TAG_DISABLED):
             at_config = ConfigDict(_rules=AUTO_TAG_CONFIG)
             at_config.match_tag = tid
             if auto_tagging not in taggers:
@@ -277,6 +280,8 @@ class Retrain(AutoTagCommand):
                                           self._get_keywords(e),
                                           which)
                             play_nice_with_threads()
+                            if mailpile.util.QUITTING:
+                                return self._error('Aborted')
                         except (IndexError, TypeError, ValueError,
                                 OSError, IOError):
                             if 'autotag' in session.config.sys.debug:
