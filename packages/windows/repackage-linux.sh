@@ -4,8 +4,8 @@
 #
 # This has been tested on Debian Stretch.
 # Required Debian packages (this list may be incomplete):
-# git gnupg gzip mingw-w64 nsis openssl p7zip python2.7 python-pip tar unzip
-# wget xz-utils (? archiver used by GnuPG build?)   
+# git gnupg gpgsm gzip mingw-w64 nsis openssl p7zip python2.7 python-pip
+# tar unzip wget xz-utils (? archiver used by GnuPG build?)   
 # 
 # Copyright (C) 2017 Jack Dodds
 # This script is part of Mailpile and is hereby released under the
