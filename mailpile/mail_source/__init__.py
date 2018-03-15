@@ -382,16 +382,19 @@ class BaseMailSource(threading.Thread):
     def _jitter(self, seconds):
         return seconds + random.randint(0, self.jitter)
 
+    def _sleeping_is_ok(self, slept):
+        return True
+
     def _sleep(self, seconds):
         enabled = self.my_config.enabled
-        if self._sleeping != 0:
-            self._sleeping = seconds
-            while (self.alive and
-                    self._sleeping > 0 and
-                    enabled == self.my_config.enabled and
-                    not mailpile.util.QUITTING):
-                time.sleep(min(1, self._sleeping))
-                self._sleeping -= 1
+        self._sleeping = seconds
+        while (self.alive and
+                self._sleeping > 0 and
+                self._sleeping_is_ok(seconds - self._sleeping) and
+                enabled == self.my_config.enabled and
+                not mailpile.util.QUITTING):
+            time.sleep(min(1, self._sleeping))
+            self._sleeping -= 1
         self._sleeping = None
         play_nice_with_threads()
         return (self.alive and not mailpile.util.QUITTING)
@@ -775,8 +778,9 @@ class BaseMailSource(threading.Thread):
             if config.prefs.allow_deletion:
                 try:
                     for i, key in enumerate(downloaded):
-                        progress['deleting'] = '%d/%d' % (i, len(downloaded))
+                        progress['deleting'] = '%d/%d' % (i+1, len(downloaded))
                         src.remove(key)
+                    src.flush()
                 except:
                     # Just ignore errors for now, we'll try again later.
                     if 'sources' in config.sys.debug:
@@ -786,6 +790,9 @@ class BaseMailSource(threading.Thread):
                     _('Deletion is disabled'), should])
 
         try:
+            # Lock the source mailbox while we work with it
+            src.lock()
+
             with self._lock:
                 loc = config.open_mailbox(session, mbx_key, prefer_local=True)
             if src == loc:
@@ -864,6 +871,7 @@ class BaseMailSource(threading.Thread):
             progress['raised'] = True
             raise
         finally:
+            src.unlock()
             progress['running'] = False
 
         maybe_delete_from_server(loc, src)
@@ -978,7 +986,9 @@ class BaseMailSource(threading.Thread):
         _original_session = self.session
 
         def sleeptime():
-            if self._last_rescan_completed or self._last_rescan_failed:
+            if not self.my_config.enabled:
+                return 24 * 3600
+            elif self._last_rescan_completed or self._last_rescan_failed:
                 return self.my_config.interval
             else:
                 return 1
@@ -1028,11 +1038,9 @@ class BaseMailSource(threading.Thread):
                 next_save_time = self._last_saved + self.SAVE_STATE_INTERVAL
                 if self.alive and time.time() >= next_save_time:
                     self._save_state()
-                    if not self.my_config.keepalive:
-                        self.close()
-                elif (self._last_rescan_completed and
-                        not self.my_config.keepalive):
-                    self.close()
+                    self._check_keepalive()
+                elif self._last_rescan_completed:
+                    self._check_keepalive()
             except:
                 self.event.data['traceback'] = traceback.format_exc()
                 self.session.ui.debug(self.event.data['traceback'])
@@ -1050,6 +1058,10 @@ class BaseMailSource(threading.Thread):
         self._log_status(_('Shut down'), clear_errors=True)
         self._save_state()
 
+    def _check_keepalive(self):
+        if not self.my_config.keepalive:
+            self.close()
+
     def _log_conn_errors(self):
         if 'connection' in self.event.data:
             cinfo = self.event.data['connection']
@@ -1062,6 +1074,9 @@ class BaseMailSource(threading.Thread):
         self._sleeping = after
 
     def rescan_now(self, session=None, started_callback=None):
+        if not self.my_config.enabled:
+            return
+
         begin, end = MSrcLock(), MSrcLock()
         for l in (begin, end):
             l.acquire()

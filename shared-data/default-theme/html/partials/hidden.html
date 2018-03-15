@@ -7,6 +7,7 @@
       </div>
       <h1 class="half-top"><%= message %></h1>
       <h3 class="half-top"><%= advice %></h3>
+      <p>&nbsp;</p>
     </div>
   </div>
 </script>
@@ -311,14 +312,14 @@
   <div class="rectangles-outer" id="contact-card-<%= email %>">
     <div class="rectangles-inner">
       <a class="contact-card-avatar left"
-{%- if is_dev_version() %}
+{%- if 0 and is_dev_version() %}
          href="{{ U('/contacts/view/<%= email %>/') }}"
 {%- endif %}
          >
         <img src="{{ U('/static/img/avatar-default.png') }}">
       </a>
       <a class="contact-card-name"
-{%- if is_dev_version() %}
+{%- if 0 and is_dev_version() %}
          href="{{ U('/contacts/view/<%= email %>/') }}"
 {%- endif %}
          >

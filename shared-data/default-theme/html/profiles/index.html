@@ -11,12 +11,6 @@
 {%- block contenttools %}
   {%- if is_configured() %}
     {%- set activities = [{
-      'name': 'privacy',
-      'icon': 'settings',
-      'url': U('/settings/privacy.html'),
-      'text': _("Privacy"),
-      'description': _("Security and Privacy Settings")
-    },{
       'name': 'browser',
       'icon': 'list',
       'url': U('/browse/'),
@@ -48,8 +42,9 @@
 {%- block content %}
 <div id="page" class="content-normal">
 
-  <h1>
-    <span class="icon icon-home"></span> {{_("Welcome Home")}}
+  <h1 class="page-title-data mobile-hide">
+    <span class="icon icon-home"></span>
+    {{_("Welcome Home")}}
   </h1>
 
 {%- if result.profiles|length > 0 %}

@@ -319,14 +319,15 @@ class MailIndex(BaseIndex):
 
     def update_ptrs_and_msgids(self, session):
         session.ui.mark(_('Updating high level indexes'))
-        for offset in range(0, len(self.INDEX)):
-            message = self.l2m(self.INDEX[offset])
-            if len(message) == self.MSG_FIELDS_V2:
-                self.MSGIDS[message[self.MSG_ID]] = offset
-                for msg_ptr in message[self.MSG_PTRS].split(','):
-                    self.PTRS[msg_ptr] = offset
-            else:
-                session.ui.warning(_('Bogus line: %s') % line)
+        with self._lock:
+            for offset in range(0, len(self.INDEX)):
+                message = self.l2m(self.INDEX[offset])
+                if len(message) == self.MSG_FIELDS_V2:
+                    self.MSGIDS[message[self.MSG_ID]] = offset
+                    for msg_ptr in message[self.MSG_PTRS].split(','):
+                        self.PTRS[msg_ptr] = offset
+                else:
+                    session.ui.warning(_('Bogus line: %s') % line)
 
     def _remove_location(self, session, msg_ptr):
         msg_idx_pos = self.PTRS[msg_ptr]
@@ -1256,7 +1257,21 @@ class MailIndex(BaseIndex):
                 or 'feedback-id' in msg):
             keywords.extend(['personal:is'])
 
+            # This generates a unique group:X keyword identifying the
+            # participants in this conversation. This will facilitate
+            # more people-focused UI work down the line.
+            emails = []
+            for hdr in ('from', 'to', 'cc'):
+                hdr = msg.get(hdr)
+                if hdr:
+                    ahp = AddressHeaderParser(hdr)
+                    emails.extend([a.address.lower() for a in ahp])
+            emails = sorted(list(set(emails)))
+            if len(emails) > 1:
+                keywords.append('%s:group' % md5_hex(', '.join(emails)))
+
         for key in EXPECTED_HEADERS:
+            # This is a useful signal for spam classification
             if not msg[key]:
                 keywords.append('%s:missing' % key)
 

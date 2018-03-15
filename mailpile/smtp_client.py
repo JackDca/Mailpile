@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 import random
 import hashlib
 import smtplib
@@ -192,7 +193,7 @@ def SendMail(session, msg_mid, from_to_msg_ev_tuples,
         update_to_vcards = msg and msg["x-mp-internal-pubkeys-attached"]
 
         if 'sendmail' in session.config.sys.debug:
-            sys.stderr.write(_('SendMail: from %s (%s), to %s via %s\n')
+            sys.stderr.write(_('Sendmail: From %s (%s), to %s via %s\n')
                              % (frm, frm_vcard and frm_vcard.random_uid or '',
                                 to, route_description))
         sm_write = sm_close = lambda: True
@@ -204,6 +205,8 @@ def SendMail(session, msg_mid, from_to_msg_ev_tuples,
             #       which should ensure that Popen does not spawn a shell
             #       with potentially exploitable arguments.
             cmd = (route['command'] % {"rcpt": ",".join(to)}).strip().split()
+            if cmd[0][:1] == '|':
+                cmd[0] = cmd[0][1:]
             proc = Popen(cmd, stdin=PIPE, long_running=True)
             sm_startup = None
             sm_write = proc.stdin.write
@@ -242,7 +245,7 @@ def SendMail(session, msg_mid, from_to_msg_ev_tuples,
             serverbox = [None]
             def sm_connect_server():
                 server = (smtp_ssl and SMTP_SSL or SMTP
-                          )(local_hostname='mailpile.local', timeout=25)
+                          )(local_hostname='mailpile.local', timeout=120)
                 if 'sendmail' in session.config.sys.debug:
                     server.set_debuglevel(1)
                 if smtp_ssl or proto in ('smtorp', 'smtptls'):
@@ -252,6 +255,7 @@ def SendMail(session, msg_mid, from_to_msg_ev_tuples,
                 try:
                     with ConnBroker.context(need=conn_needs) as ctx:
                         server.connect(host, int(port))
+                    server.sock.settimeout(120)
                     server.ehlo_or_helo_if_needed()
                 except (IOError, OSError, smtplib.SMTPServerDisconnected):
                     fail(_('Failed to connect to %s') % host, events,
@@ -351,12 +355,12 @@ def SendMail(session, msg_mid, from_to_msg_ev_tuples,
             # Run the entire connect/login sequence in a single timer, but
             # give it plenty of time in case the network is lame.
             if sm_startup:
-                RunTimed(300, sm_startup)
+                RunTimed(300, sm_startup, unique_thread='smtp-client')
 
             if test_only:
                 return True
 
-            mark(_('Preparing message...'), events)
+            mark(_('Preparing message…'), events)
 
             msg_string = MessageAsString(CleanMessage(session.config, msg))
             total = len(msg_string)
@@ -366,9 +370,9 @@ def SendMail(session, msg_mid, from_to_msg_ev_tuples,
                 mark(('Sending message... (%d%%)'
                       ) % (100 * (total-len(msg_string))/total), events,
                      log=False)
-                RunTimed(120, sm_write, msg_string[:20480])
+                sm_write(msg_string[:20480])
                 msg_string = msg_string[20480:]
-            RunTimed(30, sm_close)
+            sm_close()
 
             mark(_n('Message sent, %d byte',
                     'Message sent, %d bytes',

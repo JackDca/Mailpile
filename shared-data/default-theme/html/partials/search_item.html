@@ -63,7 +63,7 @@
        class="icon">&#x25BC;</a><br>
   {%- endif %}
   </td>
-  <td class="from" data-fn="{{metadata.from.fn}}" data-address="{{metadata.from.address}}">
+  <td class="from people" data-fn="{{metadata.from.fn}}" data-address="{{metadata.from.address}}">
   {%- if message.editing_strings %}
     <!-- FIXME -->
   {%- else %}
@@ -82,13 +82,16 @@
                 data-crypto_color="{{ unsigned.color }}"
                 data-crypto_message="{{ unsigned.message }}"></span>
           <ul class="message-sender-actions">
-{%- if is_dev_version() %}
+{%- if 0 and is_dev_version() %}
           {%- if not metadata.from.flags.contact and not metadata.from.flags.profile %}
             <li class="action"><a title="{{_("Add Contact")}}" class="message-action-add-contact" href="#" data-name="{{metadata.from.fn}}" data-address="{{metadata.from.address}}"><span class="icon icon-plus"></span></a></li>
           {%- endif %}
 {%- endif %}
             <li class="action"><a title="{{_("Private Reply")}}" class="message-action-reply" data-mid="{{mid}}" href="#"><span class="icon icon-reply"></span></a></li>
           </ul>
+          <div class="crypto-and-tags">
+            {%- include "partials/pile_email_tags.html" %}
+          </div>
         </h3>
         <span class="header-value" title='{{metadata.from.fn}} &lt;{{metadata.from.address}}&gt;'>
           <span class="address-avatar"><img src="{{ show_avatar(metadata.from) }}"></span>
@@ -127,49 +130,54 @@
   {%- if thread|length > 1 %}
     {%- include "partials/pile_threading.html" %}
   {%- endif %}
-  </td>
 {% else %}
   <td class="avatar">
     <a><img src="{{ show_avatar(from) }}"></a>
   </td>
-  <td class="from">
+ {%- if to_cc and display_recipients %}
+  {%- set to1 = result.data.addresses[to_cc[0]] %}
+  <td class="to people">
+    <a href="{{ msg_url(mid) }}" data-noblank=1 data-keep-selection=1
+       title="{{_("From") }}: {{metadata.from.fn}} &lt;{{metadata.from.address}}&gt;
+{{ _("To") }}: {% if to_cc %}
+ &lt;{{ to1.address }}&gt;{% if to_cc|length > 1 %} +{{ to_cc|length -1 }}{% endif %}
+{%- else %}({{_("unknown")}}){% endif %}">
+      {%- if conversation_count > 1 %}
+      {%-   if to_cc|length > 1 %}<span class="icon icon-reply-all"></span>
+      {%-   else %}<span class="icon icon-reply"></span>{% endif %}
+      {%- else %}<span class="icon icon-forward"></span>
+      {%- endif %} &nbsp;
+      {%- if to1.fn %}{{ to1.fn|nice_name(28) }}{% else %}(&lt;{{ to1.address }}&gt;){% endif %}
+      {% if to_cc|length > 1 %}<span class="rcpt-count">+{{ to_cc|length -1 }}</span>{% endif %}
+    </a>
+ {%- else %}
+  <td class="from people">
     <a href="{{msg_url(mid)}}" data-noblank=1 data-keep-selection=1
        title="{{_("From") }}: {{metadata.from.fn}} &lt;{{metadata.from.address}}&gt;
 {{ _("To") }}: {% if to_cc %}
  {%- set to1 = result.data.addresses[to_cc[0]] %}
  &lt;{{ to1.address }}&gt;{% if to_cc|length > 1 %} +{{ to_cc|length -1 }}{% endif %}
 {%- else %}({{_("unknown")}}){% endif %}">
-      {% if metadata.from.fn %}{{ metadata.from.fn|nice_name(28) }}{% else %}({{_("No Name")}}){% endif %}
-      {% if conversation_count > 1 %}<span class="conversation-count">{{conversation_count}}</span>{% endif %}
-      {% if metadata.flags.replied %}<span class="icon-reply"></span>{% else %}
-      {% if metadata.flags.forwarded %}<span class="icon-forward"></span>{% endif %}
-      {% endif %}
+      {%- if metadata.from.fn %}{{ metadata.from.fn|nice_name(28) }}{% else %}({{_("No Name")}}){% endif %}
+      {%- if conversation_count > 1 %}<span class="conversation-count">{{conversation_count}}</span>{% endif %}
+      {%- if metadata.flags.replied %}<span class="icon-reply"></span>{% else %}
+      {%-   if metadata.flags.forwarded %}<span class="icon-forward"></span>{% endif %}
+      {%- endif %}
     </a>
-  </td>
-{%endif %}
-  <td class="crypto-and-tags">
-    <span class="item-tags" style="opacity: 0.5"> {# FIXME #}
-    {% for tid in metadata.tag_tids %}
-      {% set tag = result.data.tags[tid] %}
-      {% if tag.label and not tag.searched %}
-      <span class="pile-message-tag pile-message-tag-{{tag.tid}}
-                   color-{{tag.label_color}}"
-            data-tid="{{tag.tid}}" data-mid="{{mid}}">
-        <span class="icon pile-message-tag-icon {{tag.icon}}"></span>
-      </span>
-      {% endif %}
-    {% endfor %}
-    </span>
-
-  {%- if not message %}
+ {%- endif %}
+{% endif %}
+  {%- if not message and not message_errors %}
+    <div class="crypto-and-tags">
+      {%- include "partials/pile_email_tags.html" %}
     {% if metadata.crypto.encryption in ('decrypted', 'mixed-decrypted', 'lockedkey', 'mixed-lockedkey') %}
     <span class="icon crypto icon-lock-closed color-08-green"></span>
     {% elif metadata.crypto.encryption in ('error', 'mixed-error', 'missingkey', 'mixed-missingkey') %}
     <span class="icon crypto icon-lock-closed color-12-red"></span>
     {% endif %}
   {%- endif %}
+    </div>
   </td>
-  <td class="subject">
+  <td class="subject{% if message %} full-message{% endif %}">
 {%- if message_errors %}
     {% include("partials/error_message_missing.html") %}
 {%- elif not message %}

@@ -3,6 +3,7 @@
 # Misc. utility functions for Mailpile.
 #
 import cgi
+import copy
 import ctypes
 import datetime
 import hashlib
@@ -216,6 +217,10 @@ class AccessError(Exception):
     pass
 
 
+class InternalError(AssertionError):
+    pass
+
+
 class UrlRedirectException(Exception):
     """An exception indicating we need to redirecting to another URL."""
     def __init__(self, url):
@@ -245,6 +250,12 @@ class MultiContext:
                 raised.append(e)
         if raised:
             raise raised[0]
+
+
+def safe_assert(check, *args):
+    """A safe-to-use assert() replacement that never gets compiled out."""
+    if not check:
+        raise InternalError(*args)
 
 
 def thread_context_push(**kwargs):
@@ -832,7 +843,12 @@ def dict_merge(*dicts):
 
 def play_nice(niceness):
     if hasattr(os, 'nice'):
-        os.nice(niceness)
+        try:
+            # Note: This fails on WSL (the "native" Ubuntu on Windows)
+            return os.nice(niceness)
+        except OSError:
+            pass
+    # FIXME: Try alternate strategies on other platforms?
 
 
 def play_nice_with_threads(sleep=True, weak=False, deadline=None):
@@ -958,7 +974,7 @@ class CleanText:
                                         set(range(ord('0'), ord('9') + 1)) -
                                         set(range(ord('a'), ord('z') + 1)) -
                                         set(range(ord('A'), ord('Z') + 1)) -
-                                        set([ord('_'), ord('/')]))])
+                                        set([ord('-'), ord('_'), ord('/')]))])
 
     def __init__(self, text, banned='', replace=''):
         self.clean = str("".join([i if (((ord(i) > 31 and ord(i) < 127) or
@@ -986,28 +1002,48 @@ class TimedOut(IOError):
     pass
 
 
+TIMED_THREAD_LOCK = threading.Lock()
+TIMED_THREADS = {}
+
 class RunTimedThread(threading.Thread):
-    def __init__(self, name, func):
+    def __init__(self, name, func, unique=None):
         threading.Thread.__init__(self, target=func)
-        self.name = name
         self.daemon = True
+        self.name = name
+        self.unique = unique
 
     def run_timed(self, timeout):
+        if self.unique:
+            with TIMED_THREAD_LOCK:
+                old_thread = TIMED_THREADS.get(self.unique)
+                if (old_thread is not None) and old_thread.isAlive():
+                    raise TimedOut('Old thread still alive: %s' % self.name)
+                TIMED_THREADS[self.unique] = self
+
         self.start()
         self.join(timeout=timeout)
+
         if self.isAlive() or QUITTING:
             raise TimedOut('Timed out: %s' % self.name)
+        else:
+            if self.unique:
+                with TIMED_THREAD_LOCK:
+                    TIMED_THREADS[self.unique] = None
 
 
 def RunTimed(timeout, func, *args, **kwargs):
     result, exception = [], []
+    unique = kwargs.get('unique_thread')
+    if unique:
+        kwargs = copy.copy(kwargs)
+        del kwargs['unique_thread']
     def work():
         try:
             result.append(func(*args, **kwargs))
         except:
             et, ev, etb = sys.exc_info()
             exception.append((et, ev, etb))
-    RunTimedThread(func.__name__, work).run_timed(timeout)
+    RunTimedThread(func.__name__, work, unique=unique).run_timed(timeout)
     if exception:
         t, v, tb = exception[0]
         raise t, v, tb
