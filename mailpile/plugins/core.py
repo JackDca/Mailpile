@@ -27,7 +27,7 @@ from mailpile.eventlog import Event
 from mailpile.i18n import gettext as _
 from mailpile.i18n import ngettext as _n
 from mailpile.mailboxes import IsMailbox
-from mailpile.mailutils import ClearParseCache, Email
+from mailpile.mailutils.emails import ClearParseCache, Email
 from mailpile.postinglist import GlobalPostingList
 from mailpile.plugins import PluginManager
 from mailpile.safe_popen import MakePopenUnsafe, MakePopenSafe
@@ -1700,7 +1700,7 @@ class Quit(Command):
         from mailpile.plugins.gui import UpdateGUIState
         UpdateGUIState()
 
-        self._background_save(index=True, config=True, wait=True)
+        self._background_save(index=True, config='!FORCE', wait=True)
         if self.session.config.http_worker:
             self.session.config.http_worker.quit()
 

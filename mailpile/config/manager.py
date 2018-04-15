@@ -182,6 +182,7 @@ class ConfigManager(ConfigDict):
 
         self.event_log = None
         self.index = None
+        self.index_loading = None
         self.index_check = GLOBAL_INDEX_CHECK
         self.vcards = {}
         self.search_history = SearchHistory()
@@ -465,6 +466,7 @@ class ConfigManager(ConfigDict):
             self.reset_rules_from_source()
             self.parse_config(session, '\n'.join(pub_lines), source=self.conf_pub)
             self.parse_config(session, '\n'.join(prv_lines), source=self.conffile)
+            self._changed = False
 
             # Do this again, so renames and cleanups persist
             self._configure_default_plugins()
@@ -603,7 +605,7 @@ class ConfigManager(ConfigDict):
 
         return False
 
-    def _unlocked_save(self, session=None):
+    def _unlocked_save(self, session=None, force=False):
         newfile = '%s.new' % self.conffile
         pubfile = self.conf_pub
         keyfile = self.conf_key
@@ -632,6 +634,15 @@ class ConfigManager(ConfigDict):
 
         # Save the master key if necessary (and possible)
         master_key_saved = self._save_master_key(keyfile)
+
+        # We abort the save here if nothing has changed.
+        if not force and not self._changed:
+            return
+
+        # Reset our "changed" tracking flag. Any changes that happen
+        # during the subsequent saves will mark us dirty again, since
+        # we can't be sure the changes got written out.
+        self._changed = False
 
         # This slight over-complication, is a reaction to segfaults in
         # Python 2.7.5's fd.write() method.  Let's just feed it chunks
@@ -974,7 +985,6 @@ class ConfigManager(ConfigDict):
             pass
         except:
             if self.sys.debug:
-                import traceback
                 traceback.print_exc()
 
         if mbox is None:
@@ -1253,14 +1263,15 @@ class ConfigManager(ConfigDict):
         with self.interruptable_wait_for_lock():
             if self.index:
                 return self.index
-            idx = MailIndex(self)
-            idx.load(session)
-            self.index = idx
+            self.index_loading = MailIndex(self)
+            self.index_loading.load(session)
+            self.index = self.index_loading
+            self.index_loading = None
             try:
                 self.index_check.release()
             except:
                 pass
-            return idx
+            return self.index
 
     def get_path_index(self, session, path):
         """
