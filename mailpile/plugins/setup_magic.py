@@ -61,6 +61,7 @@ class SetupMagic(Command):
             'display_order': 2,
             'icon': 'icon-inbox',
             'label_color': '06-blue',
+            'notify_new': True,
             'name': _('Inbox'),
         },
         'Blank': {
@@ -79,7 +80,7 @@ class SetupMagic(Command):
             'flag_allow_add': False,
             'display': 'priority',
             'display_order': 1,
-            'template': 'outgoing',
+            'template': 'drafts',
             'icon': 'icon-compose',
             'label_color': '03-gray-dark',
             'name': _('Drafts'),
@@ -90,7 +91,7 @@ class SetupMagic(Command):
             'flag_allow_add': False,
             'display': 'priority',
             'display_order': 3,
-            'template': 'outgoing',
+            'template': 'outbox',
             'icon': 'icon-outbox',
             'label_color': '06-blue',
             'name': _('Outbox'),
@@ -100,7 +101,7 @@ class SetupMagic(Command):
             'flag_msg_only': True,
             'display': 'priority',
             'display_order': 4,
-            'template': 'outgoing',
+            'template': 'sent',
             'icon': 'icon-sent',
             'label_color': '03-gray-dark',
             'name': _('Sent'),
@@ -158,6 +159,7 @@ class SetupMagic(Command):
             'icon': 'icon-photos',
             'label': False,
             'label_color': '08-green',
+            'template': 'photos',
             'name': _('Photos'),
             'display_order': 1002,
             '_filters': ['att:jpg is:personal'],
@@ -167,6 +169,7 @@ class SetupMagic(Command):
             'icon': 'icon-document',
             'label': False,
             'label_color': '06-blue',
+            'template': 'atts',
             'name': _('Documents'),
             'display_order': 1003,
             '_filters': ['has:document is:personal'],
@@ -575,7 +578,7 @@ class SetupGetEmailSettings(TestableWebbable):
                         result['docs'] = result.get('docs', [])
                         result['docs'].append({
                             'url': docs.get('url', ''),
-                            'description': str(docs.descr)
+                            'description': docs.descr.text
                         })
                 except AttributeError:
                     pass
@@ -820,11 +823,12 @@ class SetupGetEmailSettings(TestableWebbable):
 
         if settings['protocol'].startswith('smtp'):
             try:
-                assert(SendMail(self.session, None,
-                                [(email,
-                                  [email, 'test@mailpile.is'], None,
-                                  [event])],
-                                test_only=True, test_route=settings))
+                safe_assert(
+                    SendMail(self.session, None,
+                             [(email,
+                               [email, 'test@mailpile.is'], None,
+                               [event])],
+                             test_only=True, test_route=settings))
                 return True, True
             except (IOError, OSError, AssertionError, SendMailError):
                 pass
@@ -1005,7 +1009,7 @@ class SetupWelcome(TestableWebbable):
                 raise ValueError('Failed to configure i18n')
             config.prefs.language = language
             if save and not self._testing():
-                self._background_save(config=True)
+                self._background_save(config='!FORCE')
             return True
         except ValueError:
             return self._error(_('Invalid language: %s') % language)
@@ -1124,7 +1128,7 @@ class SetupPassword(TestableWebbable):
                         config.passphrases['DEFAULT'].set_passphrase(p1)
                         config.prefs.gpg_recipient = '!PASSWORD'
                         self.make_master_key()
-                        self._background_save(config=True)
+                        self._background_save(config='!FORCE')
                         mailpile.auth.LogoutAll()
                         done = True
                 else:
@@ -1161,7 +1165,7 @@ class SetupTestRoute(TestableWebbable):
 
         if route_id:
             route = self.session.config.routes[route_id]
-            assert(route)
+            safe_assert(route)
         else:
             route = {}
             for k in CONFIG_RULES['routes'][1]:
@@ -1178,16 +1182,17 @@ class SetupTestRoute(TestableWebbable):
         if not fromaddr or '@' not in fromaddr:
             fromaddr = '%s@%s' % (route.get('username', 'test'),
                                   route.get('host', 'example.com'))
-        assert(fromaddr)
+        safe_assert(fromaddr)
 
         error_info = {'error': _('Unknown error')}
         try:
-            assert(SendMail(self.session, None,
-                            [(fromaddr,
-                              [fromaddr, 'test@mailpile.is'],
-                              None,
-                              [self.event])],
-                            test_only=True, test_route=route))
+            safe_assert(
+                SendMail(self.session, None,
+                         [(fromaddr,
+                           [fromaddr, 'test@mailpile.is'],
+                           None,
+                           [self.event])],
+                         test_only=True, test_route=route))
             return self._success(_('Route is working'),
                                  result=route)
         except OSError:
@@ -1241,7 +1246,7 @@ class SetupTor(TestableWebbable):
             with ConnBroker.context(need=need_tor) as context:
                 motd = urlopen(MOTD_URL_TOR_ONLY_NO_MARS,
                                data=None, timeout=10).read()
-                assert(motd.strip().endswith('}'))
+                safe_assert(motd.strip().endswith('}'))
             session.config.sys.proxy.protocol = 'tor'
             message = _('Successfully configured and enabled Tor!')
         except (IOError, AssertionError):

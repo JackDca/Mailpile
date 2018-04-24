@@ -19,8 +19,8 @@ from mailpile.crypto.mime import OBSCURE_HEADERS_MILD, OBSCURE_HEADERS_EXTREME
 from mailpile.crypto.mime import ObscureSubject
 from mailpile.crypto.state import EncryptionInfo, SignatureInfo
 from mailpile.eventlog import GetThreadEvent
-from mailpile.mailutils import Email, AddressHeaderParser, ClearParseCache
-from mailpile.mailutils import MakeContentID
+from mailpile.mailutils.addresses import AddressHeaderParser
+from mailpile.mailutils.emails import Email, MakeContentID, ClearParseCache
 from mailpile.plugins import PluginManager, EmailTransform
 from mailpile.plugins.vcard_gnupg import PGPKeysImportAsVCards
 from mailpile.plugins.search import Search
@@ -551,17 +551,17 @@ class GPGCheckKeys(Search):
                                               ) % fprint
                     is_serious = False
                 elif exp and exp <= today:
-                    k_info['description'] = _('%s: Bad: expired on %s'
+                    k_info['description'] = _('%s: Bad: Expired on %s'
                                               ) % (fprint,
                                                    info['expiration_date'])
                 else:
-                    k_info['description'] = _('%s: Bad: key is useless'
+                    k_info['description'] = _('%s: Bad: Key is useless'
                                               ) % fprint
             elif exp and exp <= fortnight:
-                k_info['description'] = _('%s: Bad: expires on %s'
+                k_info['description'] = _('%s: Bad: Expires on %s'
                                           ) % (fprint, info['expiration_date'])
             elif k_info['keysize'] < self.MIN_KEYSIZE:
-                k_info['description'] = _('%s: Bad: too small (%d bits)'
+                k_info['description'] = _('%s: Bad: Too small (%d bits)'
                                           ) % (fprint, k_info['keysize'])
             else:
                 good_keys[fprint] = info

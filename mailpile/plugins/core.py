@@ -12,6 +12,7 @@ import socket
 import subprocess
 import sys
 import traceback
+import thread
 import threading
 import time
 import webbrowser
@@ -26,7 +27,7 @@ from mailpile.eventlog import Event
 from mailpile.i18n import gettext as _
 from mailpile.i18n import ngettext as _n
 from mailpile.mailboxes import IsMailbox
-from mailpile.mailutils import ClearParseCache, Email
+from mailpile.mailutils.emails import ClearParseCache, Email
 from mailpile.postinglist import GlobalPostingList
 from mailpile.plugins import PluginManager
 from mailpile.safe_popen import MakePopenUnsafe, MakePopenSafe
@@ -476,7 +477,7 @@ class Cleanup(Command):
 
     @classmethod
     def AddTask(cls, task, last=False, first=False):
-        assert(not (first and last))
+        safe_assert(not (first and last))
         if (first or last) and not cls.TASKS:
             cls.TASKS = [lambda: True]
         if first:
@@ -1028,6 +1029,22 @@ class CatFile(Command):
 
 ##[ Configuration commands ]###################################################
 
+
+class ListLanguages(Command):
+    """List available languages"""
+    SYNOPSIS = (None, 'languages', 'settings/languages', '')
+    ORDER = ('Config', 1)
+    CONFIG_REQUIRED = False
+    IS_USER_ACTIVITY = False
+    HTTP_CALLABLE = ('GET', )
+
+    def command(self):
+        from mailpile.i18n import ListTranslations
+        langs = ListTranslations(self.session.config)
+        return self._success(_('Listed available translations'),
+                             result=sorted([(l, langs[l]) for l in langs]))
+
+
 class ConfigSet(Command):
     """Change a setting"""
     SYNOPSIS = ('S', 'set', 'settings/set',
@@ -1120,7 +1137,15 @@ class ConfigSet(Command):
                         raise ValueError('Need --force to change auth policy.')
 
                 value = value.strip()
-                if value[:1] in ('{', '[') and value[-1:] in ( ']', '}'):
+                if value == '{None}':
+                    value = None
+                elif value == '{Blank}':
+                    value = ''
+                elif value == '{False}':
+                    value = False
+                elif value == '{True}':
+                    value = True
+                elif value[:1] in ('{', '[') and value[-1:] in ( ']', '}'):
                     value = json.loads(value)
                 try:
                     try:
@@ -1660,33 +1685,26 @@ class Quit(Command):
     ORDER = ("Internals", 2)
     CONFIG_REQUIRED = False
     RAISES = (KeyboardInterrupt,)
+    HTTP_CALLABLE = ('POST',)
+    HTTP_POST_VARS = {
+        'restart': 'Set to restart instead of shutting down'
+    }
     COMMAND_SECURITY = security.CC_QUIT
 
     def command(self):
-        if 'restart' in self.args:
+        if 'restart' in self.args or self.data.get('restart', [False])[0]:
             mailpile.util.QUITTING = 'restart'
         else:
             mailpile.util.QUITTING = mailpile.util.QUITTING or True
 
-        self._background_save(index=True, config=True, wait=True)
+        from mailpile.plugins.gui import UpdateGUIState
+        UpdateGUIState()
+
+        self._background_save(index=True, config='!FORCE', wait=True)
         if self.session.config.http_worker:
             self.session.config.http_worker.quit()
 
-        try:
-            import signal
-            os.kill(mailpile.util.MAIN_PID, signal.SIGINT)
-        except:
-            pass
-
-        # This puts a hard deadline on the shutdown process.
-        # This is a dangerous thing.
-        def exiter():
-            time.sleep(15)
-            os._exit(0)
-        ex = threading.Thread(target=exiter)
-        ex.daemon = True
-        ex.start()
-
+        thread.interrupt_main()
         return self._success(_('Shutting down...'))
 
 
@@ -1993,6 +2011,6 @@ _plugins.register_commands(
     BrowseOrLaunch, RunWWW, ProgramStatus, CronStatus, HealthCheck,
     GpgCommand, ListDir, ChangeDir, CatFile, WritePID, Cleanup,
     ConfigPrint, ConfigSet, ConfigAdd, ConfigUnset, ConfigureMailboxes,
-    RenderPage, Output, Pipe,
+    ListLanguages, RenderPage, Output, Pipe,
     Help, HelpVars, HelpSplash, Quit, IdleQuit, TrustingQQQ, Abort
 )

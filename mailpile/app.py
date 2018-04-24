@@ -34,6 +34,25 @@ readline = None
 ##[ Main ]####################################################################
 
 
+def threaded_raw_input(prompt):
+    """These shenigans are necessary to let Quit work reliably."""
+    def reader(container):
+        try:
+            line = raw_input(prompt).decode('utf-8').strip()
+            container.append(line)
+        except EOFError:
+            pass
+    o = []
+    t = threading.Thread(target=reader, args=(o,))
+    t.daemon = True
+    t.start()
+    while t.isAlive() and not mailpile.util.QUITTING:
+        t.join(timeout=1)
+    if not o:
+        raise EOFError()
+    return o[0]
+
+
 def CatchUnixSignals(session):
     def quit_app(sig, stack):
         Quit(session, 'quit').run()
@@ -84,12 +103,12 @@ def Interact(session):
         prompt = session.ui.term.color('mailpile> ',
                                        color=session.ui.term.BLACK,
                                        weight=session.ui.term.BOLD,
-                                       readline=True)
+                                       readline=(readline is not None))
         while not mailpile.util.QUITTING:
             try:
                 with session.ui.term:
                     session.ui.block()
-                    opt = raw_input(prompt).decode('utf-8').strip()
+                    opt = threaded_raw_input(prompt)
             except KeyboardInterrupt:
                 session.ui.unblock(force=True)
                 session.ui.notify(_('Interrupted. '
@@ -120,7 +139,7 @@ def Interact(session):
             readline.write_history_file(session.config.history_file())
         else:
             safe_remove(session.config.history_file())
-    except OSError:
+    except (OSError, AttributeError):
         pass
 
 
@@ -244,7 +263,8 @@ def Main(args):
         traceback.print_exc()
 
     finally:
-        readline.write_history_file(session.config.history_file())
+        if readline is not None:
+            readline.write_history_file(session.config.history_file())
 
         # Make everything in the background quit ASAP...
         mailpile.util.LAST_USER_ACTIVITY = 0

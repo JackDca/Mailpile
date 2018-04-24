@@ -12,8 +12,8 @@ from mailpile.commands import Command, Action
 from mailpile.eventlog import Event
 from mailpile.i18n import gettext as _
 from mailpile.i18n import ngettext as _n
-from mailpile.mailutils import Email, ExtractEmails, ExtractEmailAndName
-from mailpile.mailutils import AddressHeaderParser
+from mailpile.mailutils.addresses import AddressHeaderParser
+from mailpile.mailutils.emails import Email, ExtractEmails, ExtractEmailAndName
 from mailpile.security import SecurePassphraseStorage
 from mailpile.vcard import VCardLine, VCardStore, MailpileVCard, AddressInfo
 from mailpile.util import *
@@ -819,7 +819,7 @@ def ProfileVCard(parent):
         ORDER = ('Tagging', 3)
         VCARD = "profile"
 
-        DEFAULT_KEYTYPE = 'RSA2048'
+        DEFAULT_KEYTYPE = 'RSA3072'
 
         def _default_signature(self):
             return _('Sent using Mailpile, Free Software from www.mailpile.is')
@@ -1237,7 +1237,7 @@ class EditProfile(AddProfile):
             'security-always-encrypt': ('encrypt' in cp),
             'security-attach-keys': ('send_keys' in cf),
             'security-prefer-inline': ('prefer_inline' in cf),
-            'security-prefer-pgpgmime': ('pgpmime' in cf),
+            'security-prefer-pgpmime': ('pgpmime' in cf),
             'security-obscure-metadata': ('obscure_meta' in cf),
             'security-openpgp-header-encrypt': ('openpgp_header:E' in cf or
                                                 'openpgp_header:SE' in cf),
@@ -1287,9 +1287,9 @@ class EditProfile(AddProfile):
         session, config = self.session, self.session.config
 
         # OK, fetch the VCard.
-        assert('rid' in self.data and len(self.data['rid']) == 1)
+        safe_assert('rid' in self.data and len(self.data['rid']) == 1)
         vcard = config.vcards.get_vcard(self.data['rid'][0])
-        assert(vcard)
+        safe_assert(vcard)
 
         if self.data.get('_method') == 'POST':
             self._update_vcard_from_post(vcard)

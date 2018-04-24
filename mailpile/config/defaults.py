@@ -1,6 +1,6 @@
-APPVER = "1.0.0rc1"
+APPVER = "1.0.0rc3"
 ABOUT = """\
-Mailpile.py              a tool             Copyright 2013-2017, Mailpile ehf
+Mailpile.py              a tool             Copyright 2013-2018, Mailpile ehf
  v%8.0008s         for searching and               <https://www.mailpile.is/>
                organizing piles of e-mail
 
@@ -22,6 +22,7 @@ from mailpile.config.base import KeyConfigRule as k
 _ = lambda string: string
 
 
+DEV_MODE = ('rc' in APPVER or 'dev' in APPVER or 'github' in APPVER)
 DEFAULT_SENDMAIL = '|/usr/sbin/sendmail -i %(rcpt)s'
 CONFIG_PLUGINS = []
 CONFIG_RULES = {
@@ -40,7 +41,7 @@ CONFIG_RULES = {
         'http_no_auth':  X(_('Disable HTTP authentication'),      bool, False),
         'postinglist_kb': (_('Posting list target size in KB'), int,       64),
         'sort_max':       (_('Max results we sort "well"'), int,         2500),
-        'snippet_max':    (_('Max length of metadata snippets'), int,     250),
+        'snippet_max':    (_('Max length of metadata snippets'), int,     275),
         'debug':         p(_('Debugging flags'), str,                      ''),
         'experiments':    (_('Enabled experiments'), str,                  ''),
         'gpg_keyserver':  (_('Host:port of PGP keyserver'),
@@ -79,7 +80,8 @@ CONFIG_RULES = {
         'num_results':     (_('Search results per page'), int,             20),
         'rescan_interval': (_('Misc. data refresh frequency'), int,       900),
         'open_in_browser':p(_('Open in browser on startup'), bool,       True),
-        'auto_mark_as_read': p(_('Automatically mark as read'), bool, True),
+        'auto_mark_as_read': p(_('Automatically mark e-mail as read'),
+                                                                   bool, True),
         'web_content':     (_('Download content from the web'),
                             ["off", "anon", "on"],                  "unknown"),
         'html5_sandbox':   (_('Use HTML5 sandboxes'), bool,              True),
@@ -110,7 +112,7 @@ CONFIG_RULES = {
                             str, 'none'),
         'inline_pgp':      (_('Use inline PGP when possible'), bool,     True),
         'encrypt_subject': (_('Encrypt subjects by default'), bool,      True),
-        'default_order':   (_('Default sort order'), str,     'rev-freshness'),
+        'default_order':   (_('Default sort order'), str,          'rev-date'),
         'obfuscate_index':X(_('Key to use to scramble the index'), str,    ''),
         'index_encrypted':X(_('Make encrypted content searchable'),
                             bool, False),
@@ -121,6 +123,10 @@ CONFIG_RULES = {
         'encrypt_misc':   X(_('Encrypt misc. local data'), bool,         True),
         'allow_deletion': X(_('Allow permanent deletion of e-mails'),
                                                                   bool, False),
+# FIXME:
+#       'backup_to_web':  X(_('Backup settings and keys to mobile web app'),
+#                                                                  bool, True),
+#       'backup_to_email':X(_('Backup settings and keys to e-mail'),  str, ''),
         'rescan_command':  (_('Command run before rescanning'), str,       ''),
         'default_email':   (_('Default outgoing e-mail address'), 'email', ''),
         'default_route':   (_('Default outgoing mail route'), str, ''),
@@ -136,6 +142,8 @@ CONFIG_RULES = {
         }],
     }),
     'web': (_("Web Interface Preferences"), False, {
+        'keybindings':     (_('Enable keyboard short-cuts'), bool, False),
+        'developer_mode':  (_('Enable developer-only features'), bool, DEV_MODE),
         'setup_complete':  (_('User completed setup experience'), bool, False),
         'display_density': (_('Display density of interface'), str, 'comfy'),
         'quoted_reply':    (_('Quote replies to messages'), str, 'unset'),

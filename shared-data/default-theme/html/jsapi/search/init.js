@@ -8,8 +8,8 @@ Mailpile.Search.init = function() {
   // Drag Items
   var index_capabilities = $('.pile-results').data('index-capabilities');
   if (index_capabilities.indexOf('has_tags') >= 0) {
-    Mailpile.UI.Search.Draggable('td.draggable');
-    Mailpile.UI.Search.Dropable('.pile-results tr', 'a.sidebar-tag');
+    Mailpile.UI.Search.Draggable('td.draggable, td.avatar');
+    Mailpile.UI.Search.Droppable('.pile-results tr', 'a.sidebar-tag');
   };
 
   // Render Display Size
@@ -43,9 +43,9 @@ Mailpile.Search.init = function() {
   $('.pile-results .pile-message .subject a').eq(0).focus();
 
   EventLog.subscribe(".mail_source", function(ev) {
-    // bre: re-enabling this just for fun and to test the event subscription
-    //      code. This is broken in that it fails for non-English languages.
-    if (ev.message.indexOf("Rescanning:") != -1) {
+    // Cutesy animation, just for fun
+    if ((ev.data && ev.data.copying && ev.data.copying.running) ||
+        (ev.data && ev.data.rescan && ev.data.rescan.running)) {
       $("#logo-bluemail").fadeOut(2000);
       $("#logo-redmail").hide(2000);
       $("#logo-greenmail").hide(3000);
@@ -53,6 +53,5 @@ Mailpile.Search.init = function() {
       $("#logo-greenmail").fadeIn(4000);
       $("#logo-redmail").fadeIn(6000);
     }
-    $('.status-in-title').attr('title', ev.data.name + ': ' + ev.message);
-  });
+  }, 'mail-source-subscription');
 };

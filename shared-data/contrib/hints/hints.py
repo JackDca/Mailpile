@@ -13,10 +13,20 @@ _ = lambda t: t
 import random
 from mailpile.config.defaults import APPVER
 from mailpile.commands import Command
-from mailpile.util import md5_hex
+from mailpile.util import md5_hex, safe_assert
 
 
 TIMESTAMPS = None
+
+
+def BrokenSpambayes(cfg, ctx):
+    if 'autotag_sb' not in cfg.sys.plugins:
+        return True
+    try:
+        import spambayes
+        return False
+    except:
+        return True
 
 
 class hintsCommand(Command):
@@ -42,17 +52,32 @@ class hintsCommand(Command):
             '/page/hints/deletion.html',
             lambda cfg, ctx: not cfg.prefs.allow_deletion),
 
-        # FIXME: We should track whether the user is actually USING keyboard
-        #        shortcuts, and not bother them if that is the case.
+        ('spam-dependencies', 0, 1,
+            _('Your spam filter is broken: please install spambayes'),
+            '/page/hints/spambayes.html',
+            BrokenSpambayes),
+
         ('keyboard', 4, 180,
-            _('Mailpile has keyboard short-cuts!'),
-            "javascript:Mailpile.plugins.hints.keybindings();"),
+            _('Mailpile has keyboard shortcuts!'),
+            "/page/hints/keyboard-shortcuts.html",
+            lambda cfg, cgx: not cfg.web.keybindings),
 
         # Remind the user to manage their spam every 3 months.
         # FIXME: Allow user to somehow say "I know, shutup".
         ('spam', 5, 90,
             _('Learn how to get the most out of Mailpile\'s spam filter'),
             '/page/hints/spam.html'),
+
+	# Show the user how to organize their sidebar after 6 days.
+	('organize-sidebar', 6, 99999,
+	    _('Rearrange your sidebar to organize how you see your e-mail'),
+	    '/page/hints/organize-sidebar.html'),
+
+        # Introduce Gravatar integration after 10 days, and yearly repetition.
+        # Remind of the privacy implications
+        ('gravatar', 10, 365,
+            _('Mailpile uses Gravatar thumbnails!'),
+            '/page/hints/gravatar.html'),
 
         # Don't bother the user about backups unless they've been using the
         # app for at least 2 weeks. After that, only bug them every 6 months.
@@ -66,7 +91,6 @@ class hintsCommand(Command):
         ('autotagging', 21, 365,
             _('Mailpile can automatically tag or untag any kind of e-mail!'),
             '/page/hints/autotagging.html')]
-
 
     def _today(self):
         return int(time.time() // (24*3600))
@@ -148,14 +172,14 @@ class hintsCommand(Command):
         ctx = self.data.get('context')
 
         if 'reset' in self.args:
-            assert(self.data.get('_method', 'POST') == 'POST')
+            safe_assert(self.data.get('_method', 'POST') == 'POST')
             ts = self.timestamps()
             for k in ts.keys():
                 del ts[k]
             ts['initial'] = self._today()
 
         elif 'next' in self.args:
-            assert(self.data.get('_method', 'POST') == 'POST')
+            safe_assert(self.data.get('_method', 'POST') == 'POST')
             self.timestamps()['last_displayed'] = 0
             self.timestamps()['initial'] -= 30
 
