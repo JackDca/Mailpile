@@ -289,19 +289,12 @@ class MailIndex(BaseIndex):
                     emails.append('@%s\t%s\n' % (b36(eid), quoted_email))
                 self.EMAILS_SAVED = total
 
-<<<<<<< HEAD
-            # Unlocked, try to write this out, starting with a blank line.
-
-            data = self._maybe_encrypt( ''.join(['\n'] + emails
-                                + [self.INDEX[pos] + '\n' for pos in mods]))
-=======
             # Unlocked, try to write this out, prepending append mark comment.
 
             data = self._maybe_encrypt(''.join(
                 ['#' + self.APPEND_MARK + '\n']
                 + emails
                 + [self.INDEX[pos] + '\n' for pos in mods]))
->>>>>>> babc3e5c3e7dfa3326998d1628ffad5b0bbd27f5
             with open(self.config.mailindex_file(), 'a') as fd:
                 fd.write(data)
                 self._saved_changes += 1
