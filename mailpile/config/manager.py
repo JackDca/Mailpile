@@ -22,6 +22,7 @@ try:
 except ImportError:
     AppDirs = None
 
+import mailpile.platforms
 from mailpile.command_cache import CommandCache
 from mailpile.crypto.streamer import DecryptingStreamer
 from mailpile.crypto.gpgi import GnuPG
@@ -45,6 +46,8 @@ import mailpile.util
 import mailpile.vfs
 
 from mailpile.config.base import *
+from mailpile.config.paths import DEFAULT_WORKDIR, DEFAULT_SHARED_DATADIR
+from mailpile.config.paths import LOCK_PATHS
 from mailpile.config.defaults import APPVER
 from mailpile.config.detect import socks
 from mailpile.www.jinjaloader import MailpileJinjaLoader
@@ -62,93 +65,15 @@ class ConfigManager(ConfigDict):
     the settings themselves, as well as global objects like the index and
     references to any background worker threads.
     """
-    @classmethod
-    def DEFAULT_WORKDIR(self):
-        # The Mailpile environment variable trumps everything
-        workdir = os.getenv('MAILPILE_HOME')
-        if workdir:
-            return workdir
-
-        # Which profile?
-        profile = os.getenv('MAILPILE_PROFILE', 'default')
-
-        # Check if we have a legacy setup we need to preserve
-        workdir = self.LEGACY_DEFAULT_WORKDIR(profile)
-        if not AppDirs or (os.path.exists(workdir) and os.path.isdir(workdir)):
-            return workdir
-
-        # Use platform-specific defaults
-        # via https://github.com/ActiveState/appdirs
-        dirs = AppDirs("Mailpile", "Mailpile ehf")
-        return os.path.join(dirs.user_data_dir, profile)
-
-    @classmethod
-    def LEGACY_DEFAULT_WORKDIR(self, profile):
-        if profile == 'default':
-            # Backwards compatibility: If the old ~/.mailpile exists, use it.
-            workdir = os.path.expanduser('~/.mailpile')
-            if os.path.exists(workdir) and os.path.isdir(workdir):
-                return workdir
-
-        basedir = None
-        if sys.platform.startswith('win'):
-            # Obey Windows conventions (more or less?)
-            basedir = os.getenv('APPDATA', os.path.expanduser('~'))
-        elif sys.platform.startswith('darwin'):
-            # Obey Mac OS X conventions
-            basedir = os.path.expanduser('~/Library/Application Support')
-        else:
-            # Assume other platforms are Unixy
-            basedir = os.getenv('XDG_DATA_HOME',
-                                os.path.expanduser('~/.local/share'))
-
-        return os.path.join(basedir, 'Mailpile', profile)
-
-    @classmethod
-    def DEFAULT_SHARED_DATADIR(self):
-        # IMPORTANT: This code is duplicated in mailpile-admin.py.
-        #            If it needs changing please change both places!
-        env_share = os.getenv('MAILPILE_SHARED')
-        if env_share is not None:
-            return env_share
-
-        # Check if we are running in a virtual env
-        # http://stackoverflow.com/questions/1871549/python-determine-if-running-inside-virtualenv
-        # We must also check that we are installed in the virtual env,
-        # not just that we are running in a virtual env.
-        if (hasattr(sys, 'real_prefix') or hasattr(sys, 'base_prefix')) and __file__.startswith(sys.prefix):
-            return os.path.join(sys.prefix, 'share', 'mailpile')
-
-        # Check if we've been installed to /usr/local (or equivalent)
-        usr_local = os.path.join(sys.prefix, 'local')
-        if __file__.startswith(usr_local):
-            return os.path.join(usr_local, 'share', 'mailpile')
-
-        # Check if we are in /usr/ (sys.prefix)
-        if __file__.startswith(sys.prefix):
-            return os.path.join(sys.prefix, 'share', 'mailpile')
-
-        # Else assume dev mode, source tree layout
-        return os.path.join(
-            os.path.dirname(__file__), '..', '..', 'shared-data')
-
-    @classmethod
-    def LOCK_PATHS(cls, workdir=None):
-        if workdir is None:
-            workdir = cls.DEFAULT_WORKDIR()
-        return (
-            os.path.join(workdir, 'public-lock'),
-            os.path.join(workdir, 'workdir-lock'))
-
     def __init__(self, workdir=None, shareddatadir=None, rules={}):
         ConfigDict.__init__(self, _rules=rules, _magic=False)
 
-        self.workdir = os.path.abspath(workdir or self.DEFAULT_WORKDIR())
+        self.workdir = os.path.abspath(workdir or DEFAULT_WORKDIR())
         self.gnupghome = None
         mailpile.vfs.register_alias('/Mailpile', self.workdir)
 
         self.shareddatadir = os.path.abspath(shareddatadir or
-                                             self.DEFAULT_SHARED_DATADIR())
+                                             DEFAULT_SHARED_DATADIR())
         mailpile.vfs.register_alias('/Share', self.shareddatadir)
 
         self.vfs_root = MailpileVfsRoot(self)
@@ -159,13 +84,15 @@ class ConfigManager(ConfigDict):
         self.conf_pub = os.path.join(self.workdir, 'mailpile.rc')
 
         # Process lock files are not actually created until the first acquire()
-        self.lock_pubconf, self.lock_workdir = self.LOCK_PATHS(self.workdir)
+        self.lock_pubconf, self.lock_workdir = LOCK_PATHS(self.workdir)
         self.lock_pubconf = fasteners.InterProcessLock(self.lock_pubconf)
 
         # If the master key changes, we update the file on save, otherwise
         # the file is untouched. So we keep track of things here.
+        self._master_key = ''
         self._master_key_ondisk = None
         self._master_key_passgen = -1
+        self.detected_memory_corruption = False
 
         # Make sure we have a silent background session
         self.background = Session(self)
@@ -223,6 +150,7 @@ class ConfigManager(ConfigDict):
             if session:
                 session.ui.notify(_('Creating: %s') % self.workdir)
             os.makedirs(self.workdir, mode=0700)
+            mailpile.platforms.RestrictReadAccess(self.workdir)
 
         # Once acquired, lock_workdir is only released by process termination.
         if not isinstance(self.lock_workdir, fasteners.InterProcessLock):
@@ -234,77 +162,6 @@ class ConfigManager(ConfigDict):
                     session.ui.error(_('Another Mailpile or program is'
                                        ' using the profile directory'))
                 sys.exit(1)
-
-    def parse_config(self, session, data, source='internal'):
-        """
-        Parse a config file fragment. Invalid data will be ignored, but will
-        generate warnings in the session UI. Returns True on a clean parse,
-        False if any of the settings were bogus.
-
-        >>> cfg.parse_config(session, '[config/sys]\\nfd_cache_size = 123\\n')
-        True
-        >>> cfg.sys.fd_cache_size
-        123
-
-        >>> cfg.parse_config(session, '[config/bogus]\\nblabla = bla\\n')
-        False
-        >>> [l[1] for l in session.ui.log_buffer if 'bogus' in l[1]][0]
-        'Invalid (internal): section config/bogus does not exist'
-
-        >>> cfg.parse_config(session, '[config/sys]\\nhistory_length = 321\\n'
-        ...                                          'bogus_variable = 456\\n')
-        False
-        >>> cfg.sys.history_length
-        321
-        >>> [l[1] for l in session.ui.log_buffer if 'bogus_var' in l[1]][0]
-        u'Invalid (internal): section config/sys, ...
-
-        >>> cfg.parse_config(session, '[config/tags/a]\\nname = TagName\\n')
-        True
-        >>> cfg.tags['a']._key
-        'a'
-        >>> cfg.tags['a'].name
-        u'TagName'
-        """
-        parser = CommentedEscapedConfigParser()
-        parser.readfp(io.BytesIO(str(data)))
-
-        def item_sorter(i):
-            try:
-                return (int(i[0], 36), i[1])
-            except (ValueError, IndexError, KeyError, TypeError):
-                return i
-
-        all_okay = True
-        for section in parser.sections():
-            okay = True
-            cfgpath = section.split(':')[0].split('/')[1:]
-            cfg = self
-            added_parts = []
-            for part in cfgpath:
-                if cfg.fmt_key(part) in cfg.keys():
-                    cfg = cfg[part]
-                elif '_any' in cfg.rules:
-                    cfg[part] = {}
-                    cfg = cfg[part]
-                else:
-                    if session:
-                        msg = _('Invalid (%s): section %s does not '
-                                'exist') % (source, section)
-                        session.ui.warning(msg)
-                    all_okay = okay = False
-            items = parser.items(section) if okay else []
-            items.sort(key=item_sorter)
-            for var, val in items:
-                try:
-                    cfg[var] = val
-                except (ValueError, KeyError, IndexError):
-                    if session:
-                        msg = _(u'Invalid (%s): section %s, variable %s=%s'
-                                ) % (source, section, var, val)
-                        session.ui.warning(msg)
-                    all_okay = okay = False
-        return all_okay
 
     def load(self, session, *args, **kwargs):
         from mailpile.plugins.core import Rescan
@@ -365,8 +222,8 @@ class ConfigManager(ConfigDict):
 
         if keydata:
             self.passphrases['DEFAULT'].copy(passphrase)
-            self.master_key = ''.join(keydata)
-            self._master_key_ondisk = self.master_key
+            self.set_master_key(''.join(keydata))
+            self._master_key_ondisk = self.get_master_key()
             self._master_key_passgen = self.passphrases['DEFAULT'].generation
             return True
         else:
@@ -387,8 +244,10 @@ class ConfigManager(ConfigDict):
             os.path.join(self.shareddatadir, 'contrib'),
             os.path.join(self.workdir, 'plugins')
         ])
-        self.sys.plugins.rules['_any'][self.RULE_CHECKER
-                                       ] = [None] + self.plugins.loadable()
+        self.sys.plugins.rules['_any'][
+            self.RULE_CHECKER] = [None] + self.plugins.loadable()
+        self.sys.plugins_early.rules['_any'][
+            self.RULE_CHECKER] = [None] + self.plugins.loadable_early()
 
     def _configure_default_plugins(self):
         if (len(self.sys.plugins) == 0) and self.loaded_config:
@@ -433,6 +292,7 @@ class ConfigManager(ConfigDict):
                 return
 
             if os.path.exists(self.conf_key):
+                mailpile.platforms.RestrictReadAccess(self.conf_key)
                 self.load_master_key(self.passphrases['DEFAULT'],
                                      _raise=IOError)
             self._load_config_lines(self.conffile, prv_lines)
@@ -475,9 +335,9 @@ class ConfigManager(ConfigDict):
         ## both config files!
 
         # Open event log
-        dec_key_func = lambda: self.master_key
+        dec_key_func = lambda: self.get_master_key()
         enc_key_func = lambda: (self.prefs.encrypt_events and
-                                self.master_key)
+                                self.get_master_key())
         self.event_log = EventLog(self.data_directory('event_log',
                                                       mode='rw', mkdir=True),
                                   dec_key_func, enc_key_func
@@ -510,11 +370,15 @@ class ConfigManager(ConfigDict):
             self.set_rules(self._rules_source)
             self.sys.plugins.rules['_any'][
                 self.RULE_CHECKER] = [None] + self.plugins.loadable()
+            self.sys.plugins_early.rules['_any'][
+                self.RULE_CHECKER] = [None] + self.plugins.loadable_early()
 
     def load_plugins(self, session):
         with self._lock:
             from mailpile.plugins import PluginManager
-            plugin_list = set(PluginManager.REQUIRED + self.sys.plugins)
+            plugin_list = set(PluginManager.REQUIRED +
+                              self.sys.plugins +
+                              self.sys.plugins_early)
             for plugin in plugin_list:
                 if plugin is not None:
                     session.ui.mark(_('Loading plugin: %s') % plugin)
@@ -526,6 +390,33 @@ class ConfigManager(ConfigDict):
     def save(self, *args, **kwargs):
         with self._lock:
             self._unlocked_save(*args, **kwargs)
+
+    def get_master_key(self):
+        if not self._master_key:
+            return ''
+
+        k1, k2, k3 = (k[1:] for k in self._master_key)
+        if k1 == k2 == k3:
+            # This is the only result we like!
+            return k1
+        else:
+            # Hard fail into read-only lockdown. The periodic health
+            # check will notify the user we are broken.
+            self.detected_memory_corruption = True
+
+        # Try and recover; best 2 out of 3.
+        if k1 in (k2, k3):
+            return self.set_master_key(k1)
+        if k2 in (k1, k3):
+            return self.set_master_key(k2)
+
+        mailpile.util.QUITTING = True
+        raise IOError("Failed to access master_key")
+
+    def set_master_key(self, key):
+        # Prefix each key with a unique character to prevent optimization
+        self._master_key = [i + key for i in ('1', '2', '3')]
+        return key
 
     def _delete_old_master_keys(self, keyfile):
         """
@@ -542,14 +433,14 @@ class ConfigManager(ConfigDict):
                 safe_remove(fn)
 
     def _save_master_key(self, keyfile):
-        if not self.master_key:
+        if not self.get_master_key():
             return False
 
         # We keep the master key in a file of its own...
         want_renamed_keyfile = None
         master_passphrase = self.passphrases['DEFAULT']
         if (self._master_key_passgen != master_passphrase.generation
-                or self._master_key_ondisk != self.master_key):
+                or self._master_key_ondisk != self.get_master_key()):
             if os.path.exists(keyfile):
                 want_renamed_keyfile = keyfile + ('.%x' % time.time())
 
@@ -578,7 +469,7 @@ class ConfigManager(ConfigDict):
         # FIXME: Create event and capture GnuPG state?
         mps = master_passphrase.stretched(salt)
         gpg = GnuPG(self, passphrase=mps)
-        status, encrypted_key = gpg.encrypt(self.master_key, tokeys=tokeys)
+        status, encrypted_key = gpg.encrypt(self.get_master_key(), tokeys=tokeys)
         if status == 0:
             if salt:
                 h, b = encrypted_key.replace('\r', '').split('\n\n', 1)
@@ -587,10 +478,11 @@ class ConfigManager(ConfigDict):
             try:
                 with open(keyfile + '.new', 'wb') as fd:
                     fd.write(encrypted_key)
+                mailpile.platforms.RestrictReadAccess(keyfile + '.new')
                 if want_renamed_keyfile:
                     os.rename(keyfile, want_renamed_keyfile)
                 os.rename(keyfile + '.new', keyfile)
-                self._master_key_ondisk = self.master_key
+                self._master_key_ondisk = self.get_master_key()
                 self._master_key_passgen = master_passphrase.generation
 
                 # Delete any old key backups we have laying around
@@ -652,9 +544,9 @@ class ConfigManager(ConfigDict):
                          for i in range(0, len(config_bytes), 4096))
 
         from mailpile.crypto.streamer import EncryptingStreamer
-        if self.master_key and master_key_saved:
+        if self.get_master_key() and master_key_saved:
             subj = self.mailpile_path(self.conffile)
-            with EncryptingStreamer(self.master_key,
+            with EncryptingStreamer(self.get_master_key(),
                                     dir=self.tempfile_dir(),
                                     header_data={'subject': subj},
                                     name='Config') as fd:
@@ -670,10 +562,12 @@ class ConfigManager(ConfigDict):
 
         # Keep the last 5 config files around... just in case.
         backup_file(self.conffile, backups=5, min_age_delta=900)
-        if sys.platform.startswith('win'):
+        if mailpile.platforms.RenameCannotOverwrite():
             try:
+                # We only do this if we have to; we would rather just
+                # use rename() as it's (more) atomic.
                 os.remove(self.conffile)
-            except WindowsError:
+            except (OSError, IOError):
                 pass
         os.rename(newfile, self.conffile)
 
@@ -766,10 +660,10 @@ class ConfigManager(ConfigDict):
 
     def load_pickle(self, pfn):
         with open(os.path.join(self.workdir, pfn), 'rb') as fd:
-            if self.master_key:
+            if self.get_master_key():
                 from mailpile.crypto.streamer import DecryptingStreamer
                 with DecryptingStreamer(fd,
-                                        mep_key=self.master_key,
+                                        mep_key=self.get_master_key(),
                                         name='load_pickle(%s)' % pfn
                                         ) as streamer:
                     rv = cPickle.loads(streamer.read())
@@ -780,9 +674,9 @@ class ConfigManager(ConfigDict):
 
     def save_pickle(self, obj, pfn, encrypt=True):
         ppath = os.path.join(self.workdir, pfn)
-        if encrypt and self.master_key and self.prefs.encrypt_misc:
+        if encrypt and self.get_master_key() and self.prefs.encrypt_misc:
             from mailpile.crypto.streamer import EncryptingStreamer
-            with EncryptingStreamer(self.master_key,
+            with EncryptingStreamer(self.get_master_key(),
                                     dir=self.tempfile_dir(),
                                     header_data={'subject': pfn},
                                     name='save_pickle') as fd:
@@ -1007,9 +901,9 @@ class ConfigManager(ConfigDict):
             mbox.is_local = prefer_local
 
         # Always set these, they can't be pickled
-        mbox._decryption_key_func = lambda: self.master_key
+        mbox._decryption_key_func = lambda: self.get_master_key()
         mbox._encryption_key_func = lambda: (self.prefs.encrypt_mail and
-                                             self.master_key)
+                                             self.get_master_key())
 
         # Finally, re-add to the cache
         self.cache_mailbox(session, pfn, mbx_id, mbox)
@@ -1032,9 +926,9 @@ class ConfigManager(ConfigDict):
                     path = os.path.join(path, os.path.basename(name))
 
             mbx = wervd.MailpileMailbox(path)
-            mbx._decryption_key_func = lambda: self.master_key
+            mbx._decryption_key_func = lambda: self.get_master_key()
             mbx._encryption_key_func = lambda: (self.prefs.encrypt_mail and
-                                                self.master_key)
+                                                self.get_master_key())
             return FilePath(path), mbx
 
     def open_local_mailbox(self, session):
@@ -1157,11 +1051,6 @@ class ConfigManager(ConfigDict):
             raise ValueError(_("Route %s for %s does not exist."
                                ) % (routeid, frm))
 
-    @classmethod
-    def getLocaleDirectory(self):
-        """Get the gettext translation object, no matter where our CWD is"""
-        return os.path.join(self.DEFAULT_SHARED_DATADIR(), "locale")
-
     def data_directory(self, ftype, mode='rb', mkdir=False):
         """
         Return the path to a data directory for a particular type of file
@@ -1245,6 +1134,8 @@ class ConfigManager(ConfigDict):
 
     def need_more_disk_space(self, required=0, nodefault=False, ratio=1.0):
         """Returns a path where we need more disk space, None if all is ok."""
+        if self.detected_memory_corruption:
+            return '/'
         if not (nodefault and required):
             required = ratio * max(required, self.sys.minfree_mb * 1024 * 1024)
         for path in (self.workdir, ):
@@ -1356,9 +1247,7 @@ class ConfigManager(ConfigDict):
                               config.sys.http_path or '')
             if sspec[0].lower() != 'disabled' and sspec[1] >= 0:
                 try:
-                    if sys.platform.startswith('win'):
-                        # On Windows config.http_worker does not detect
-                        # port reuse, so do this kludgy test.
+                    if mailpile.platforms.NeedExplicitPortCheck():
                         try:
                             socket.socket().connect((sspec[0],sspec[1]))
                             port_in_use = True
@@ -1434,15 +1323,15 @@ class ConfigManager(ConfigDict):
                 config.save_worker.add_unique_task(
                     config.background, 'save_metadata_index',
                     lambda: config.index.save_changes())
-            config.cron_worker.add_task('save_metadata_index', 900,
-                                        metadata_index_saver)
+            config.cron_worker.add_task(
+                'save_metadata_index', 900, metadata_index_saver)
 
             def search_history_saver():
                 config.save_worker.add_unique_task(
                     config.background, 'save_search_history',
                     lambda: config.search_history.save(config))
-            config.cron_worker.add_task('save_search_history', 900,
-                                        search_history_saver)
+            config.cron_worker.add_task(
+                'save_search_history', 900, search_history_saver)
 
             def refresh_command_cache():
                 config.scan_worker.add_unique_task(
@@ -1450,8 +1339,8 @@ class ConfigManager(ConfigDict):
                     lambda: config.command_cache.refresh(
                         event_log=config.event_log),
                     first=True)
-            config.cron_worker.add_task('refresh_command_cache', 5,
-                                        refresh_command_cache)
+            config.cron_worker.add_task(
+                'refresh_command_cache', 5, refresh_command_cache)
 
             from mailpile.postinglist import GlobalPostingList
             from mailpile.plugins.core import HealthCheck

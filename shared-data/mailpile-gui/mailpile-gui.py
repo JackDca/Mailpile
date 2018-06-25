@@ -26,17 +26,19 @@ import subprocess
 import threading
 from cStringIO import StringIO
 
+from mailpile.config.base import ConfigDict
 from mailpile.config.defaults import CONFIG_RULES
-from mailpile.config.manager import ConfigManager
+from mailpile.config.paths import DEFAULT_WORKDIR, DEFAULT_SHARED_DATADIR
+from mailpile.config.paths import LOCK_PATHS
 from mailpile.i18n import ActivateTranslation
 from mailpile.i18n import gettext as _
-from mailpile.plugins.gui import GetUserSecret
+from mailpile.security import GetUserSecret
 
 
 APPDIR = os.path.abspath(os.path.dirname(__file__))
 if not os.path.exists(os.path.join(APPDIR, 'media', 'splash.jpg')):
     APPDIR = os.path.abspath(os.path.join(
-        ConfigManager.DEFAULT_SHARED_DATADIR(), 'mailpile-gui'))
+        DEFAULT_SHARED_DATADIR(), 'mailpile-gui'))
 
 MEDIA_PATH = os.path.join(APPDIR, 'media')
 ICONS_PATH = os.path.join(APPDIR, 'icons-%(theme)s')
@@ -64,11 +66,11 @@ def BASIC_GUI_CONFIGURATION(state):
         "app_icon": "image:logo",
         "images": {
             "logo":       os.path.join(MEDIA_PATH, 'logo-color.png'),
-            "new-setup":  os.path.join(MEDIA_PATH, 'new-setup.svg'),
-            "logged-in":  os.path.join(MEDIA_PATH, 'lock-open.svg'),
-            "logged-out": os.path.join(MEDIA_PATH, 'lock-closed.svg'),
-            "ra-on":      os.path.join(MEDIA_PATH, 'remote-access-on.svg'),
-            "ra-off":     os.path.join(MEDIA_PATH, 'remote-access-off.svg'),
+            "new-setup":  os.path.join(MEDIA_PATH, 'new-setup.png'),
+            "logged-in":  os.path.join(MEDIA_PATH, 'lock-open.png'),
+            "logged-out": os.path.join(MEDIA_PATH, 'lock-closed.png'),
+            "ra-on":      os.path.join(MEDIA_PATH, 'remote-access-on.png'),
+            "ra-off":     os.path.join(MEDIA_PATH, 'remote-access-off.png'),
             "startup":    os.path.join(ICONS_PATH, 'startup.png'),
             "normal":     os.path.join(ICONS_PATH, 'normal.png'),
             "attention":  os.path.join(ICONS_PATH, 'attention.png'),
@@ -168,14 +170,15 @@ def BASIC_GUI_CONFIGURATION(state):
 class MailpileState(object):
     def __init__(self):
         self.base_url = 'http://localhost:33411/'
+        self.workdir = DEFAULT_WORKDIR()
+        self.secret = GetUserSecret(self.workdir)
         self.pub_config = None
         self.is_running = None
-        self.secret = ''
 
     def check_if_running(self):
         # FIXME: This is rather slow. We should refactor upstream to speed
         #        up or include our own custom parser if that is infeasible.
-        wd_lock_path = ConfigManager.LOCK_PATHS()[1]
+        wd_lock_path = LOCK_PATHS()[1]
         wd_lock = fasteners.InterProcessLock(wd_lock_path)
         try:
             if wd_lock.acquire(blocking=False):
@@ -187,15 +190,18 @@ class MailpileState(object):
             return False
 
     def _load_public_config(self):
-        self.pub_config = ConfigManager(rules=CONFIG_RULES)
+        self.pub_config = ConfigDict(_rules=CONFIG_RULES)
         try:
-            self.pub_config.load(None, public_only=True)
-            self.secret = GetUserSecret(self.pub_config)
+            conffile = os.path.join(self.workdir, 'mailpile.rc')
+            with open(conffile) as fd:
+                self.pub_config.parse_config(None, fd.read(), source=conffile)
             self.base_url = 'http://%s:%s%s/' % (
                 self.pub_config.sys.http_host,
                 self.pub_config.sys.http_port,
                 self.pub_config.sys.http_path)
         except:
+            import traceback
+            traceback.print_exc()
             self.pub_config = None
 
     def discover(self, argv):
@@ -212,6 +218,67 @@ def GenerateConfig(state):
     """Generate the basic gui-o-matic window configuration."""
     config = BASIC_GUI_CONFIGURATION(state)
     return json.dumps(config, indent=2)
+
+
+def LocateMailpile():
+    """
+    Locate the main mailpile launcher script
+    """
+    # Locate mailpile's root script, searching upward from our script
+    # location. We do this BEFORE checking the system PATH, to increase
+    # our odds of finding a mailpile script from the same bundle as this
+    # particualr mailpile-gui.py (there might be more than one?).
+    directory = APPDIR
+    while True:
+        for sub in ('scripts', 'bin'):
+            mailpile_path = os.path.join(directory, sub, 'mailpile')
+            if os.path.exists(mailpile_path):
+                return mailpile_path
+
+        parts = os.path.split(directory)
+        if parts[0] == directory:
+            break
+        else:
+            directory = parts[0]
+
+    # Finally, check if the Mailpile script is on the system PATH.
+    # Note: Turns out os.defpath and $PATH are not the same thing.
+    for directory in (
+            os.getenv('PATH', '').split(os.pathsep) +
+            os.defpath.split(os.pathsep)):
+        if directory:
+            mailpile_path = os.path.join(directory, 'mailpile')
+            if os.path.exists(mailpile_path):
+                return mailpile_path
+
+    raise OSError('Cannot locate mailpile launcher script!')
+
+
+def MailpileInvocation():
+    """
+    Return an appropriately formated string for invoking mailpile.
+
+    Really this is a container for platform specific behavior
+    """
+    parts = []
+    common_opts = [
+        '--set="prefs.open_in_browser=false"',
+        '--gui=%PORT% ' ]
+
+    if os.name == 'nt':
+        parts.append('"{}"'.format(sys.executable))
+        parts.append('"{}"'.format(LocateMailpile()))
+        parts.extend(common_opts)
+        parts.append('--www=')
+        parts.append('--wait')
+    else:
+        # FIXME: This should launch a screen session using the
+        #        same concepts as multipile's mailpile-admin.
+        parts.append('screen -S mailpile -d -m "{}"'.format(LocateMailpile()))
+        parts.extend(common_opts)
+        parts.append('--interact')
+
+    return ' '.join(parts)
 
 
 def GenerateBootstrap(state):
@@ -241,12 +308,7 @@ def GenerateBootstrap(state):
                 SPLASH_SCREEN(state, _("Launching Mailpile"))),
             "set_next_error_message %s" % json.dumps({
                 'message': _("Failed to launch Mailpile!")}),
-            "OK LISTEN TCP: " + (
-                # FIXME: This should launch a screen session using the
-                #        same concepts as multipile's mailpile-admin.
-                'screen -S mailpile -d -m mailpile'
-                ' --set=prefs.open_in_browser=false '
-                ' --gui=%PORT% --interact')]
+            "OK LISTEN TCP: " + MailpileInvocation() ]
 
     return '\n'.join(bootstrap)
 

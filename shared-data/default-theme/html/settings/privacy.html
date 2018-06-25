@@ -145,7 +145,7 @@
             $('#enable-tor-working').show();
             $('#enable-tor-result').html('');
             Mailpile.API.setup_tor_post({
-              _timeout: 300000
+              _timeout: (Mailpile.ajax_timeout * 30)
             }, function(result) {
               $('#enable-tor-working').hide();
               $('#enable-tor').show();
@@ -291,7 +291,13 @@
 
   <a name="data-security"></a><div class="setting-group">
     <h3>{{_("Securing Your Data")}}</h3>
+
     <div class="explanation">
+      <p class="what">
+        <span class="icon icon-settings"></span>
+        {{_("Your Mailpile stores data here:")}}<br>
+        <a target=_blank href='file:///{{ config.workdir }}/'>{{ config.workdir }}</a>
+      </p>
       <p class="what">
         <span class="icon icon-lock-closed"></span>
         {{_("Mailpile can encrypt your e-mail, search engine and settings.")}}

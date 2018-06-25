@@ -300,7 +300,7 @@ class SearchResults(dict):
         return thread
 
     WANT_MSG_TREE = ('attachments', 'html_parts', 'text_parts', 'header_list',
-                     'editing_strings', 'crypto')
+                     'editing_strings', 'crypto', '_cleaned')
     PRUNE_MSG_TREE = ('headers', )  # Added by editing_strings
 
     def _prune_msg_tree(self, tree):
@@ -441,6 +441,7 @@ class SearchResults(dict):
                 'end': start + min(num, len(results)-start),
                 'total': len(results),
             },
+            'search_order': session.order,
             'search_terms': session.searched,
             'index_capabilities': dict((c, True) for c in idx.CAPABILITIES),
             'tag_capabilities': {},

@@ -17,14 +17,34 @@ import time
 from mailpile.i18n import gettext as _
 from mailpile.i18n import ngettext as _n
 from mailpile.util import *
+import mailpile.platforms
 
 DISABLE_LOCKDOWN = False
 
-##[ These are the sys.lockdown restrictions ]#################################
 
+##[ This is a secret only user owning Mailpile could know ]###################
+
+def GetUserSecret(workdir):
+    """Return a secret that only this Unix user could know."""
+    secret_file = os.path.join(workdir, 'mailpile.sec')
+    try:
+        return open(secret_file).read().strip()
+    except (OSError, IOError):
+        pass
+
+    # FIXME: Does this work reasonably on Windows? Does chmod do anything?
+    random_secret = okay_random(64, __file__)
+    with open(secret_file, 'w') as fd:
+        fd.write(random_secret)
+    mailpile.platforms.RestrictReadAccess(secret_file)
+    return random_secret
+
+
+##[ These are the sys.lockdown restrictions ]#################################
 
 def _lockdown(config):
     if DISABLE_LOCKDOWN: return False
+    if config.detected_memory_corruption: return 99  # FIXME: Breaks demos?
     lockdown = config.sys.lockdown or 0
     try:
         return int(lockdown)
@@ -66,6 +86,14 @@ def _lockdown_config(config):
     return False
 
 
+def _lockdown_quit(config):
+    if DISABLE_LOCKDOWN: return False
+    # The user is always allowed to quit, except in demo mode.
+    if _lockdown(config) < 0:
+        return _('In lockdown, doing nothing.')
+    return False
+
+
 def _lockdown_basic(config):
     if DISABLE_LOCKDOWN: return False
     return _lockdown_config(config) or in_disk_lockdown(config)
@@ -90,7 +118,7 @@ CC_COMPOSE_EMAIL      = [_lockdown_strict]
 CC_CPU_INTENSIVE      = [_lockdown_basic]
 CC_LIST_PRIVATE_DATA  = [_lockdown_minimal]
 CC_TAG_EMAIL          = [_lockdown_strict]
-CC_QUIT               = [_lockdown_minimal]
+CC_QUIT               = [_lockdown_quit]
 CC_WEB_TERMINAL       = [_lockdown_config]
 
 CC_CONFIG_MAP = {
