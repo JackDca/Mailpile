@@ -24,6 +24,7 @@ from mailpile.mailutils.emails import Email, MakeContentID, ClearParseCache
 from mailpile.plugins import PluginManager, EmailTransform
 from mailpile.plugins.vcard_gnupg import PGPKeysImportAsVCards
 from mailpile.plugins.search import Search
+from mailpile.crypto.autocrypt_utils import make_autocrypt_header
 
 _plugins = PluginManager(builtin=__file__)
 
@@ -52,6 +53,7 @@ class ContentTxf(EmailTransform):
             "key": keydata}
 
     def TransformOutgoing(self, sender, rcpts, msg, **kwargs):
+        # *** msg is email.mime.multipart.MIMEMultipart
         matched = False
         gnupg = None
         sender_keyid = None
@@ -95,6 +97,20 @@ class ContentTxf(EmailTransform):
             msg["OpenPGP"] = ("id=%s; preference=%s"
                               % (sender_keyid, preference))
 
+        # Inject Autocrypt header if required.
+        try:
+            autocrypt_accounts = profile['vcard'].get(
+                            'x-mailpile-autocrypt-accounts').value
+        except:
+            autocrypt_accounts = None
+            
+        if autocrypt_accounts:
+            gnupg = gnupg or GnuPG(self.config, event=GetThreadEvent())       
+            autocrypt_header = make_autocrypt_header(gnupg, autocrypt_accounts,
+                                                sender, sender_keyid, rcpts)
+            if autocrypt_header:
+                msg["Autocrypt"] = autocrypt_header
+     
         if ('attach-pgp-pubkey' in msg and
                 msg['attach-pgp-pubkey'][:3].lower() in ('yes', 'tru')):
             gnupg = gnupg or GnuPG(self.config, event=GetThreadEvent())
@@ -384,14 +400,21 @@ class GPGKeyList(Command):
 
 
 class GPGKeyListSecret(Command):
-    """List Secret GPG Keys"""
+    """List secret GPG Keys, --usable omits disabled, revoked, expired."""
     ORDER = ('', 0)
     SYNOPSIS = (None, 'crypto/gpg/keylist/secret',
-                'crypto/gpg/keylist/secret', '<address>')
+                                    'crypto/gpg/keylist/secret', '[--usable]')
     HTTP_CALLABLE = ('GET', )
 
     def command(self):
-        res = self._gnupg().list_secret_keys()
+    
+        all = self._gnupg().list_secret_keys()
+        if '--usable' in self.args:
+            res = {fprint : all[fprint] for fprint in all if not (
+                        all[fprint]['disabled'] or all[fprint]['revoked'] or
+                        all[fprint]['expired'])}
+        else:
+            res = all
         return self._success("Searched for secret keys", res)
 
 

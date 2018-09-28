@@ -23,6 +23,7 @@ from mailpile.i18n import ngettext as _n
 from mailpile.crypto.state import *
 from mailpile.crypto.mime import MimeSigningWrapper, MimeEncryptingWrapper
 from mailpile.safe_popen import Popen, PIPE, Safe_Pipe
+from mailpile.crypto.autocrypt_utils import minimal_key
 
 
 _ = lambda s: s
@@ -290,6 +291,7 @@ class GnuPGRecordParser:
         }
         line["disabled"] = "D" in line["capabilities"]
         line["revoked"] = "r" in line["validity"]
+        line["expired"] = "e" in line["validity"]
 
         self._parse_dates(line)
 
@@ -797,6 +799,7 @@ class GnuPG:
         list_keys = ["--fingerprint"]
         if selectors:
             for sel in selectors:
+                # FIXME - In 2.1.18 and 1.4.21 only one --list-keys is needed.
                 list_keys += ["--list-secret-keys", sel]
         else:
             list_keys += ["--list-secret-keys"]
@@ -806,18 +809,19 @@ class GnuPG:
         retvals = self.run(list_keys)
         secret_keys = self.parse_keylist(retvals[1]["stdout"])
 
-        # Another unfortunate thing GPG does, is it hides the disabled
+        # Another unfortunate thing GnuPG < 2.1 does, is it hides the disabled
         # state when listing secret keys; it seems internally only the
         # public key is disabled. This makes it hard for us to reason about
         # which keys can actually be used, so we compensate...
         list_keys = ["--fingerprint"]
         for fprint in set(secret_keys):
+            # FIXME - In both 2.1.18 and 1.4.21 only one --list-keys is needed.
             list_keys += ["--list-keys", fprint]
         retvals = self.run(list_keys)
         public_keys = self.parse_keylist(retvals[1]["stdout"])
         for fprint, info in public_keys.iteritems():
             if fprint in set(secret_keys):
-                for k in ("disabled", "revoked"):  # FIXME: Copy more?
+                for k in ("disabled", "revoked", "expired"):
                     secret_keys[fprint][k] = info[k]
 
         return secret_keys
@@ -1344,6 +1348,17 @@ class GnuPG:
 
     def get_pubkey(self, keyid):
         return self.export_pubkeys(selectors=[keyid])
+
+    def get_minimal_key(self, key_id = None, user_id = None, subkey_id = None):
+        if key_id:
+            selector = key_id    
+        elif subkey_id:
+            selector = subkey_id
+        else:
+            selector = user_id
+        key_all = self.export_pubkeys(selectors=[selector])
+        
+        return minimal_key(key_all, user_id = user_id, subkey_id = subkey_id)
 
     def export_pubkeys(self, selectors=None):
         self.event.running_gpg(_('Exporting keys %s from keychain'
