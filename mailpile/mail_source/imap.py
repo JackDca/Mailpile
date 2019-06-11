@@ -680,8 +680,9 @@ def _connect_imap(session, settings, event,
 
         username = password = ""
         try:
-            error_type = 'auth'
-            error_msg = _('Invalid username or password')
+            error_type = 'login'
+            error_msg = _('IMAP Login error')
+            auth_error_type = auth_error_msg = None
             username = settings.get('username', '').encode('utf-8')
             password = IndirectPassword(
                 session.config,
@@ -690,8 +691,8 @@ def _connect_imap(session, settings, event,
 
             if (settings.get('auth_type', '').lower() == 'oauth2'
                     and 'AUTH=XOAUTH2' in capabilities):
-                error_type = 'oauth2'
-                error_msg = _('Access denied by mail server')
+                auth_error_type = 'oauth2'
+                auth_error_msg = _('Access denied by mail server')
                 token_info = OAuth2.GetFreshTokenInfo(session, username)
                 if not (username and token_info and token_info.access_token):
                     raise ValueError("Missing configuration")
@@ -703,9 +704,21 @@ def _connect_imap(session, settings, event,
                     token_info.access_token = ''
 
             else:
+                auth_error_type = 'auth'
+                auth_error_msg = _('Invalid username or password')
                 ok, data = timed_imap(conn.login, username, password)
-
-        except (IMAP4.error, UnicodeDecodeError, ValueError):
+                
+        except IMAP4.error as save_error:
+            error_str = save_error.__str__()
+            ok, data = False, error_str
+            if auth_error_type and (
+                    '[AUTHENTICATIONFAILED]' in error_str or   # See RFC5530
+                    '[AUTHORIZATIONFAILED]' in error_str or
+                    '[EXPIRED]' in error_str ):    
+                error_type = auth_error_type
+                error_msg = auth_error_msg
+                    
+        except (UnicodeDecodeError, ValueError):
             ok, data = False, None
         if not ok:
             auth_summary = ''

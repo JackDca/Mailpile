@@ -1050,6 +1050,7 @@ class BaseMailSource(threading.Thread):
             return False
 
         self._loop_count = 0
+        retry_countdown = retry_wait = 1
         while self._loop_count == 0 or self._sleep(self._jitter(sleeptime())):
             self.event.data['enabled'] = self.my_config.enabled
             self.event.data['profile_id'] = self.my_config.profile
@@ -1060,6 +1061,7 @@ class BaseMailSource(threading.Thread):
                 if self._loop_count > 1:
                     self._log_status(_('Disabled'), clear_errors=True)
                 self._loop_count = 1
+                retry_countdown = retry_wait = 1
                 self.close()
                 continue
 
@@ -1067,9 +1069,20 @@ class BaseMailSource(threading.Thread):
             self._update_unknown_state()
             if not self.session.config.index:
                 continue
-
-            if have_invalid_auth():
-                continue
+            
+            conn_err = self.event.data.get('connection', {}).get('error')
+            if conn_err and conn_err[0] in ('oauth2', 'auth'):
+                retry_countdown -= 1 
+                if (retry_countdown > 0
+                        and self._summarize_auth() == conn_err[-1]):
+                    self.session.ui.debug('Auth unchanged, doing nothing')
+                    continue
+                else:
+                    retry_wait *= 2
+                    retry_wait = min(max(retry_wait, 1), 100)
+                    retry_countdown = retry_wait
+            else:
+                retry_countdown = retry_wait = 1                
 
             waiters, self._rescan_waiters = self._rescan_waiters, []
             for b, e, s in waiters:
