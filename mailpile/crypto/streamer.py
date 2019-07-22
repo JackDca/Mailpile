@@ -1,3 +1,4 @@
+from __future__ import print_function
 #
 # This is code to stream data to or from encrypted storage. If the invoking
 # code us correctly written, it should be able to work with data far in
@@ -43,7 +44,6 @@ from tempfile import NamedTemporaryFile
 import mailpile.platforms
 from mailpile.i18n import gettext as _
 from mailpile.i18n import ngettext as _n
-from mailpile.crypto.gpgi import GPG_BINARY
 from mailpile.safe_popen import Popen, PIPE
 from mailpile.util import CryptoLock, safe_remove, safe_assert
 from mailpile.util import sha512b64 as genkey
@@ -74,7 +74,8 @@ BLANK_LINE_RE = re.compile('^\s*$')
 PREFERRED_FORMAT = 'v2:%s' % PREFERRED_CIPHER
 DETECTED_OBSOLETE_FORMATS = set([])
 
-OPENSSL_COMMAND = mailpile.platforms.GetDefaultOpenSSLCommand()
+OPENSSL_COMMAND = mailpile.platforms.GetDefaultOpenSSLCommand
+OPENSSL_MD_ALG = "md5"
 
 # FIXME: Why does Windows require this? Move to mailpile.platforms when
 #        we understand the underlying issue.
@@ -226,16 +227,20 @@ class ReadLineIOFilter(IOFilter):
 
     def _maybe_flush(self, eof=False):
         if eof or (self.buf_bytes >= self.blocksize):
-            i, self.info = self.info, 'writing'
+            i, self.info = self.info, 'flushing'
             self.writing_to.write(self.callback(''.join(self.buffered)))
             self.buffered = []
             self.buf_bytes = 0
-            if eof:
-                self.writing_to.write(self.callback(None) or '')
+            while eof:
+                self.info = 'flushing EOF'
+                data = self.callback(None) or ''
+                self.writing_to.write(data)
+                if not data:
+                    break
             self.info = i
 
     def _copy_loop(self):
-        self.info = 'reading'
+        self.info = 'copying'
         for line in self.reading_from:
             if self.aborting: return
 
@@ -257,14 +262,15 @@ class IOCoprocess(object):
         self.stderr = ''
         self._retval = None
         self._reading = False
+        self.command = command
         self.name = name
         if command:
             try:
                 self._proc, self._fd = self._popen(command, fd, long_running)
             except:
-                print 'Popen(%s, %s, %s)' % (command, fd, long_running)
+                print('Popen(%s, %s, %s)' % (command, fd, long_running))
                 traceback.print_exc()
-                print
+                print()
                 raise
         else:
             self._proc, self._fd = None, fd
@@ -280,15 +286,24 @@ class IOCoprocess(object):
             proc, fd, self._proc, self._fd = self._proc, self._fd, None, None
             if proc and fd:
                 fd.close(*args)
+                self.stderr = proc.stderr.read()
+
                 # If we were reading from the process, not writing, then
                 # closing our FD above may not be enough to terminate it,
                 # and the following calls may hang. So kill kill kill.
                 if self._reading:
-                    proc.terminate()
-                    time.sleep(0.1)
-                    if proc.poll() is None:
-                        proc.kill()
-                self.stderr = proc.stderr.read()
+                    count = 0
+                    while proc.poll() is None:
+                        time.sleep(0.01)
+                        if count == 4:
+                            print('TERM => %s' % proc)
+                            proc.terminate()
+                        elif count > 9:
+                            print('KILL => %s' % proc)
+                            proc.kill()
+                            break
+                        count += 1
+
                 self._retval = proc.wait()
             else:
                 self._retval = 0
@@ -624,8 +639,8 @@ class EncryptingDelimitedStreamer(ChecksummingStreamer):
     def _mk_command(self):
         if self.encryptor:
             return None
-        return [OPENSSL_COMMAND, "enc", "-e", "-a", "-%s" % self.cipher,
-                "-pass", "stdin", "-bufsize", "0"]
+        return [OPENSSL_COMMAND(), "enc", "-e", "-a", "-%s" % self.cipher,
+                "-pass", "stdin", "-bufsize", "0", "-md", OPENSSL_MD_ALG]
 
     def _write_preamble(self):
         self.fd.write(self.BEGIN_DATA)
@@ -701,7 +716,7 @@ class DecryptingStreamer(InputCoprocess):
 
     def __init__(self, fd,
                  mep_key=None, gpg_pass=None, sha256=None, cipher=None,
-                 name=None, long_running=False, gpgi=None):
+                 name=None, long_running=False, gpgi=None, md_alg=None):
         self.expected_outer_sha256 = sha256
         self.expected_inner_sha256 = None
         self.expected_inner_md5sum = None
@@ -710,6 +725,7 @@ class DecryptingStreamer(InputCoprocess):
         self.inner_sha = hashlib.sha256()
         self.inner_md5 = hashlib.md5()
         self.cipher = self.PREFERRED_CIPHER or PREFERRED_CIPHER
+        self.md_alg = md_alg or OPENSSL_MD_ALG
         self.state = self.STATE_BEGIN
         self.buffered = ''
         self.mep_version = None
@@ -758,7 +774,7 @@ class DecryptingStreamer(InputCoprocess):
     def verify(self, testing=False, _raise=None):
         if self.close() != 0:
             if testing:
-                print 'Close returned nonzero'
+                print('Close returned nonzero')
             if _raise:
                 raise _raise('Non-zero exit code from coprocess')
             return False
@@ -767,31 +783,31 @@ class DecryptingStreamer(InputCoprocess):
             mac = mac_sha256(self.mep_mutated, self.inner_sha.digest())
             if self.expected_inner_sha256 != mac:
                 if testing:
-                    print 'Inner %s != %s' % (self.expected_inner_sha256, mac)
+                    print('Inner %s != %s' % (self.expected_inner_sha256, mac))
                 if _raise:
                     raise _raise('Invalid inner SHA256')
                 return False
         elif self.expected_inner_md5sum:
             if self.expected_inner_md5sum != self.inner_md5.hexdigest():
                 if testing:
-                    print 'Inner %s != %s' % (self.expected_inner_md5sum,
-                                              self.inner_md5.hexdigest())
+                    print('Inner %s != %s' % (self.expected_inner_md5sum,
+                                              self.inner_md5.hexdigest()))
                 if _raise:
                     raise _raise('Invalid inner MD5 sum')
                 return False
         elif testing and not self.expected_inner_md5sum:
-            print 'No inner MD5 sum or SHA256 expected'
+            print('No inner MD5 sum or SHA256 expected')
 
         if self.expected_outer_sha256:
             mac = mac_sha256(self.mep_mutated, self.outer_sha.digest())
             if self.expected_outer_sha256 != mac:
                 if testing:
-                    print 'Outer %s != %s' % (self.expected_outer_sha256, mac)
+                    print('Outer %s != %s' % (self.expected_outer_sha256, mac))
                 if _raise:
                     raise _raise('Invalid outer SHA256')
                 return False
         elif testing and not self.expected_outer_sha256:
-            print 'No outer SHA256 expected'
+            print('No outer SHA256 expected')
         return True
 
     def _mk_data_filter(self, fd, cb, ecb):
@@ -973,8 +989,8 @@ class DecryptingStreamer(InputCoprocess):
                 return self.gpgi.common_args(will_send_passphrase=True)
             else:
                 return self.gpgi.common_args()
-        return [OPENSSL_COMMAND, "enc", "-d", "-a", "-%s" % self.cipher,
-                "-pass", "stdin"]
+        return [OPENSSL_COMMAND(), "enc", "-d", "-a", "-%s" % self.cipher,
+                "-pass", "stdin", "-md", self.md_alg]
 
 
 class PartialDecryptingStreamer(DecryptingStreamer):
@@ -993,6 +1009,13 @@ class PartialDecryptingStreamer(DecryptingStreamer):
 if __name__ == "__main__":
     import random  # See! Not in the main module!
     import StringIO
+
+    def _assert(val, want=True, msg='assert'):
+        if isinstance(want, bool):
+            if (not val) == (not want):
+                want = val
+        if val != want:
+            raise AssertionError('%s(%s==%s)' % (msg, val, want))
 
     LEGACY_TEST_KEY = 'test key'
     LEGACY_PLAINTEXT = 'Hello world! This is great!\nHooray, lalalalla!\n'
@@ -1032,8 +1055,8 @@ U2FsdGVkX19U8G7SKp8QygUusdHZThlrLcI04+jZ9U5kwfsw7bJJ2721dwgIpCUh
         try:
             for fd in fdpair2:
                 if fd not in fdpair1:
-                    print 'Probably have an FD leak at %s!' % where
-                    print 'Verify with: lsof -g %s' % os.getpid()
+                    print('Probably have an FD leak at %s!' % where)
+                    print('Verify with: lsof -g %s' % os.getpid())
                     import time
                     time.sleep(900)
                     return False
@@ -1053,34 +1076,34 @@ U2FsdGVkX19U8G7SKp8QygUusdHZThlrLcI04+jZ9U5kwfsw7bJJ2721dwgIpCUh
     except OSError:
         pass
 
-    print 'Test the IOFilter in write mode'
+    print('Test the IOFilter in write mode')
     with open('/tmp/iofilter.tmp', 'w') as bfd:
         with IOFilter(bfd, counter) as iof:
             iof.writer().write('Hello world!')
     with open('/tmp/iofilter.tmp', 'r') as iof:
         assert(iof.read() == 'Hello world!')
-    assert(bc[0] == 12)
-    assert(fdcheck('IOFilter in write mode'))
+    _assert(bc[0], 12)
+    _assert(fdcheck('IOFilter in write mode'))
 
-    print 'Test the IOFilter in read mode'
+    print('Test the IOFilter in read mode')
     bc[0] = 0
     with open('/tmp/iofilter.tmp', 'r') as bfd:
         with IOFilter(bfd, counter) as iof:
             data = iof.reader().read()
-            assert(data == 'Hello world!')
-            assert(bc[0] == 12)
-    assert(fdcheck('IOFilter in read mode'))
+            _assert(data, 'Hello world!')
+            _assert(bc[0], 12)
+    _assert(fdcheck('IOFilter in read mode'))
 
-    print 'Test the IOFilter in incomplete read mode'
+    print('Test the IOFilter in incomplete read mode')
     bc[0] = 0
     with open('/dev/urandom', 'r') as bfd:
         with IOFilter(bfd, counter) as iof:
             data = iof.reader().read(4096)
-    assert(bc[0] >= 4096)
-    assert(len(data) == 4096)
-    assert(fdcheck('IOFilter in incomplete read mode'))
+    _assert(bc[0] >= 4096, msg='%s >= 4096' % bc[0])
+    _assert(len(data) == 4096)
+    _assert(fdcheck('IOFilter in incomplete read mode'))
 
-    print 'Test the ReadLineIOFilter in incomplete read mode'
+    print('Test the ReadLineIOFilter in incomplete read mode')
     bc[0], daemonlogline = 0, ''
     with open('/etc/passwd', 'r') as bfd:
         with IOFilter(bfd, counter) as iof:
@@ -1088,40 +1111,45 @@ U2FsdGVkX19U8G7SKp8QygUusdHZThlrLcI04+jZ9U5kwfsw7bJJ2721dwgIpCUh
                 if 'daemon' in line:
                     daemonlogline = line
                     break
-    assert(bc[0] > 80)
-    assert('daemon' in daemonlogline)
-    assert(fdcheck('ReadLineIOFilter in incomplete read mode'))
+    _assert(bc[0] > 80, msg='%s > 80' % bc[0])
+    _assert('daemon' in daemonlogline, msg='daemon in %s' % daemonlogline)
+    _assert(fdcheck('ReadLineIOFilter in incomplete read mode'))
 
-    print 'Null decryption test, sha256 verification only'
+    print('Null decryption test, sha256 verification only')
     outer_mac_sha256 = '7982970534e089b839957b7e174725ce1878731ed6d700766e59cb16f1c25e27'
     with open('/tmp/iofilter.tmp', 'rb') as bfd:
         with DecryptingStreamer(bfd,
                                 mep_key='test key',
                                 sha256=outer_mac_sha256
                                 ) as ds:
-            assert('Hello world!' == ds.read())
-            assert(ds.verify(testing=True))
-    assert(fdcheck('Decrypting test, sha256 verification'))
+            _assert('Hello world!', ds.read())
+            _assert(ds.verify(testing=True))
+    _assert(fdcheck('Decrypting test, sha256 verification'))
 
-    print 'Legacy (MEP v1) decryption test'
+    print('Legacy (MEP v1) decryption test')
     for legacy in (LEGACY_TEST_1, LEGACY_TEST_2):
         lfd = StringIO.StringIO(legacy)
         with PartialDecryptingStreamer([], lfd,
                                        mep_key=LEGACY_TEST_KEY) as ds:
             plaintext = ''
-            d = ds.read(9999)
-            while d:
+            d = ds.read(1)
+            while len(d) > 0:
                 plaintext += d
-                d = ds.read(random.randint(10, 1024))
-            assert(ds.close() == 0)
-            assert(ds.verify(testing=True))
-            assert(plaintext == LEGACY_PLAINTEXT)
+                d = ds.read(random.randint(10, max(11, len(legacy))))
+            try:
+                _assert(plaintext, LEGACY_PLAINTEXT)
+                _assert(ds.verify(testing=True))
+            except AssertionError:
+                print('command=%s' % ds.command)
+                print('stderr=%s' % ds.stderr)
+                print('key=%s [%s]\n%s' % (LEGACY_TEST_KEY, ds.mep_mutated, legacy))
+                raise
 
     for cipher in ('none', 'broken', 'aes-128-ctr', 'aes-256-cbc'):
       for filter_sha256 in (True, False):
         for delim in (True, False):
-            print ('Encryption test, cipher=%s, delim=%s, filter_sha256=%s'
-                   ) % (cipher, delim, filter_sha256)
+            print(('Encryption test, cipher=%s, delim=%s, filter_sha256=%s'
+                   ) % (cipher, delim, filter_sha256))
 
             fn = '/tmp/enc-%s-%s-%s.tmp' % (cipher, delim, filter_sha256)
             with open(fn, 'wb') as fd:
@@ -1150,10 +1178,10 @@ U2FsdGVkX19U8G7SKp8QygUusdHZThlrLcI04+jZ9U5kwfsw7bJJ2721dwgIpCUh
                     es.finish()
                     es.save(fn, mode=mode)
                     encrypted.append(es.outer_mac_sha256())
-            assert(fdcheck('Encrypted data, delimited=%s' % delim))
+            _assert(fdcheck('Encrypted data, delimited=%s' % delim))
 
             t1 = time.time()
-            print 'Decryption test, delim=%s' % delim
+            print('Decryption test, delim=%s' % delim)
             with open(fn, 'rb') as bfd:
                 new_data = ''
                 for ms in encrypted:
@@ -1168,25 +1196,24 @@ U2FsdGVkX19U8G7SKp8QygUusdHZThlrLcI04+jZ9U5kwfsw7bJJ2721dwgIpCUh
                         while d:
                             new_data += d
                             d = ds.read(random.randint(10, 102400))
-                        assert(ds.close() == 0)
-                        assert(ds.verify(testing=True))
+                        _assert(ds.verify(testing=True))
                 try:
-                    assert(data == new_data)
+                    _assert(data, new_data)
                 except:
-                    print 'OLD %d bytes vs. NEW %d bytes: \n%s\n' % (
-                        len(data), len(new_data), new_data[-100:])
+                    print('OLD %d bytes vs. NEW %d bytes: \n%s\n' % (
+                        len(data), len(new_data), new_data[-100:]))
                     raise
-            assert(fdcheck('Decrypting test, delimited=%s' % delim))
+            _assert(fdcheck('Decrypting test, delimited=%s' % delim))
             t2 = time.time()
             print (' => Elapsed: %.3fs + %.3fs = %.3fs (%.2f MB/s)'
                    % (t1-t0, t2-t1, t2-t0, len(new_data)/(1024*1024*(t2-t0))))
 
         # Cleanup
         os.unlink(fn)
-      print
+      print()
 
-    assert(len(DETECTED_OBSOLETE_FORMATS) > 0)
-    print 'Obsolete formats detected: %s' % DETECTED_OBSOLETE_FORMATS
+    _assert(len(DETECTED_OBSOLETE_FORMATS) > 0)
+    print('Obsolete formats detected: %s' % DETECTED_OBSOLETE_FORMATS)
 
     os.unlink('/tmp/iofilter.tmp')
-    assert(fdcheck('All done'))
+    _assert(fdcheck('All done'))

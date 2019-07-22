@@ -1,4 +1,5 @@
-APPVER = "1.0.0rc4"
+from __future__ import print_function
+APPVER = "1.0.0rc5"
 ABOUT = """\
 Mailpile.py              a tool             Copyright 2013-2018, Mailpile ehf
  v%8.0008s         for searching and               <https://www.mailpile.is/>
@@ -98,6 +99,7 @@ CONFIG_RULES = {
         'web_content':     (_('Download content from the web'),
                             ["off", "anon", "on"],                  "unknown"),
         'html5_sandbox':   (_('Use HTML5 sandboxes'), bool,              True),
+        'attachment_urls': (_('URLs to treat as attachments (regex)'), str, []),
         'weak_crypto_max_age': (
                _('Accept weak crypto in messages older than this (unix time)'),
                                                                   int,      0),
@@ -259,7 +261,7 @@ if __name__ == "__main__":
     import mailpile.config.defaults
     from mailpile.config.base import ConfigDict
 
-    print '%s' % (ConfigDict(_name='mailpile',
+    print('%s' % (ConfigDict(_name='mailpile',
                              _comment='Base configuration',
                              _rules=mailpile.config.defaults.CONFIG_RULES
-                             ).as_config_bytes(), )
+                             ).as_config_bytes(), ))

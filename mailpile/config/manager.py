@@ -1,3 +1,4 @@
+from __future__ import print_function
 import copy
 import cPickle
 import io
@@ -150,7 +151,7 @@ class ConfigManager(ConfigDict):
         if not os.path.exists(self.workdir):
             if session:
                 session.ui.notify(_('Creating: %s') % self.workdir)
-            os.makedirs(self.workdir, mode=0700)
+            os.makedirs(self.workdir, mode=0o700)
             mailpile.platforms.RestrictReadAccess(self.workdir)
 
         # Once acquired, lock_workdir is only released by process termination.
@@ -625,7 +626,11 @@ class ConfigManager(ConfigDict):
         if with_mail_source is True:
             mailboxes = [(i, p, s) for i, p, s in mailboxes if s]
         elif with_mail_source is False:
-            mailboxes = [(i, p, s) for i, p, s in mailboxes if not s]
+            if mail_source_locals:
+                mailboxes = [(i, p, s) for i, p, s in mailboxes
+                             if (not s) or (not s.enabled)]
+            else:
+                mailboxes = [(i, p, s) for i, p, s in mailboxes if not s]
         else:
             pass  # All mailboxes, with or without mail sources
 
@@ -663,19 +668,26 @@ class ConfigManager(ConfigDict):
         except ValueError:
             return False
 
-    def load_pickle(self, pfn):
-        with open(os.path.join(self.workdir, pfn), 'rb') as fd:
-            if self.get_master_key():
+    def load_pickle(self, pfn, delete_if_corrupt=False):
+        pickle_path = os.path.join(self.workdir, pfn)
+        with open(pickle_path, 'rb') as fd:
+            master_key = self.get_master_key()
+            if master_key:
                 from mailpile.crypto.streamer import DecryptingStreamer
                 with DecryptingStreamer(fd,
-                                        mep_key=self.get_master_key(),
+                                        mep_key=master_key,
                                         name='load_pickle(%s)' % pfn
                                         ) as streamer:
-                    rv = cPickle.loads(streamer.read())
+                    data = streamer.read()
                     streamer.verify(_raise=IOError)
-                    return rv
             else:
-                return cPickle.loads(fd.read())
+                data = fd.read()
+        try:
+            return cPickle.loads(data)
+        except cPickle.UnpicklingError:
+            if delete_if_corrupt:
+                safe_remove(pickle_path)
+            raise IOError('Load/unpickle failed')
 
     def save_pickle(self, obj, pfn, encrypt=True):
         ppath = os.path.join(self.workdir, pfn)
@@ -877,7 +889,7 @@ class ConfigManager(ConfigDict):
                     return None
                 if session:
                     session.ui.mark(_('%s: Updating: %s') % (mbx_id, mfn))
-                mbox = self.load_pickle(pfn)
+                mbox = self.load_pickle(pfn, delete_if_corrupt=True)
             if prefer_local and not mbox.is_local:
                 mbox = None
             else:
@@ -887,10 +899,11 @@ class ConfigManager(ConfigDict):
         except KeyboardInterrupt:
             raise
         except IOError:
-            pass
+            mbox = None
         except:
             if self.sys.debug:
                 traceback.print_exc()
+            mbox = None
 
         if mbox is None:
             if session:
@@ -907,8 +920,8 @@ class ConfigManager(ConfigDict):
 
         # Always set these, they can't be pickled
         mbox._decryption_key_func = lambda: self.get_master_key()
-        mbox._encryption_key_func = lambda: (self.prefs.encrypt_mail and
-                                             self.get_master_key())
+        mbox._encryption_key_func = lambda: (self.get_master_key() if
+                                             self.prefs.encrypt_mail else None)
 
         # Finally, re-add to the cache
         self.cache_mailbox(session, pfn, mbx_id, mbox)
@@ -932,8 +945,8 @@ class ConfigManager(ConfigDict):
 
             mbx = wervd.MailpileMailbox(path)
             mbx._decryption_key_func = lambda: self.get_master_key()
-            mbx._encryption_key_func = lambda: (self.prefs.encrypt_mail and
-                                                self.get_master_key())
+            mbx._encryption_key_func = lambda: (self.get_master_key() if
+                                                self.prefs.encrypt_mail else None)
             return FilePath(path), mbx
 
     def open_local_mailbox(self, session):
@@ -1288,10 +1301,10 @@ class ConfigManager(ConfigDict):
                         except socket.error:
                             port_in_use = False
                         if port_in_use:
-                            raise socket.error, errno.EADDRINUSE
+                            raise socket.error(errno.EADDRINUSE)
                     config.http_worker = HttpWorker(config.background, sspec)
                     config.http_worker.start()
-                except socket.error, e:
+                except socket.error as e:
                     if e[0] == errno.EADDRINUSE:
                         session.ui.error(
                             _('Port %s:%s in use by another Mailpile or program'
@@ -1450,7 +1463,7 @@ class ConfigManager(ConfigDict):
             for w in worker_list:
                 if w and w.isAlive():
                     if config.sys.debug and wait:
-                        print 'Waiting for %s' % w
+                        print('Waiting for %s' % w)
                     w.quit(join=wait)
 
         # Flush the mailbox cache (queues save worker jobs)
@@ -1462,7 +1475,7 @@ class ConfigManager(ConfigDict):
             save_worker = config.save_worker
             config.save_worker = config.dumb_worker
         if config.sys.debug:
-            print 'Waiting for %s' % save_worker
+            print('Waiting for %s' % save_worker)
 
         from mailpile.postinglist import PLC_CACHE_FlushAndClean
         PLC_CACHE_FlushAndClean(config.background, keep=0)
@@ -1471,7 +1484,7 @@ class ConfigManager(ConfigDict):
 
         if config.sys.debug:
             # Hooray!
-            print 'All stopped!'
+            print('All stopped!')
 
     def _unlocked_notify_workers_config_changed(config):
         worker_list = config._unlocked_get_all_workers()
@@ -1555,6 +1568,6 @@ if __name__ == "__main__":
     results = doctest.testmod(optionflags=doctest.ELLIPSIS,
                               extraglobs={'cfg': cfg,
                                           'session': session})
-    print '%s' % (results, )
+    print('%s' % (results, ))
     if results.failed:
         sys.exit(1)

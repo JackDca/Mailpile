@@ -1,3 +1,4 @@
+from __future__ import print_function
 # This implements our IMAP mail source. It has been tested against the
 # following IMAP implementations:
 #
@@ -124,7 +125,7 @@ def _parse_imap(reply):
             if isinstance(dline, (str, unicode)):
                 m = IMAP_TOKEN.match(dline)
             else:
-                print 'WARNING: Unparsed IMAP response data: %s' % (dline,)
+                print('WARNING: Unparsed IMAP response data: %s' % (dline,))
                 m = None
             if m:
                 token = m.group(0)
@@ -329,7 +330,7 @@ class SharedImapConn(threading.Thread):
                     break
             send_line('DONE')
             # Note: We let the IDLE response drop on the floor, don't care.
-        except (socket.error, OSError), val:
+        except (socket.error, OSError) as val:
             raise self._conn.abort('socket error: %s' % val)
 
     def quit(self):
@@ -539,6 +540,9 @@ class SharedImapMailbox(Mailbox):
 
     def get_file_by_ptr(self, msg_ptr):
         return self.get_file(unquote(msg_ptr[MBX_ID_LEN:]))
+
+    def remove_by_ptr(self, msg_ptr):
+        return self.remove(unquote(msg_ptr[MBX_ID_LEN:]))
 
     def get_msg_size(self, key):
         return long(self.get_info(key).get('RFC822.SIZE', 0))
@@ -953,7 +957,7 @@ class ImapMailSource(BaseMailSource):
             return False
 
     def _check_keepalive(self):
-        alive_for = time.time() - self.logged_in_at
+        alive_for = time.time() - (self.logged_in_at or time.time())
         if (not self.my_config.keepalive) or alive_for > (12 * 3600):
             if ('IDLE' not in self.capabilities or
                     alive_for > self.my_config.interval):
@@ -1217,7 +1221,7 @@ if __name__ == "__main__":
     results = doctest.testmod(optionflags=doctest.ELLIPSIS,
                               extraglobs={'session': session,
                                           'imap_config': config.sources.imap})
-    print '%s' % (results, )
+    print('%s' % (results, ))
     if results.failed:
         sys.exit(1)
 
@@ -1230,11 +1234,11 @@ if __name__ == "__main__":
         config.sources.imap.password = password
         imap = ImapMailSource(session, config.sources.imap)
         with imap.open(throw=IMAP_IOError) as conn:
-            print '%s' % (conn.list(), )
+            print('%s' % (conn.list(), ))
         mbx = SharedImapMailbox(config, imap, mailbox_path='INBOX')
-        print '%s' % list(mbx.iterkeys())
+        print('%s' % list(mbx.iterkeys()))
         for key in args:
             info, payload = mbx.get(key)
-            print '%s(%d bytes) = %s\n%s' % (mbx.get_msg_ptr('0000', key),
+            print('%s(%d bytes) = %s\n%s' % (mbx.get_msg_ptr('0000', key),
                                              mbx.get_msg_size(key),
-                                             info, payload)
+                                             info, payload))

@@ -2,6 +2,7 @@
 #
 # FIXME: Refactor this monster into mailpile.mailutils.*
 #
+from __future__ import print_function
 import base64
 import copy
 import email.header
@@ -41,7 +42,7 @@ from mailpile.mailutils.generator import Generator
 from mailpile.mailutils.html import extract_text_from_html, clean_html
 from mailpile.mailutils.headerprint import HeaderPrints
 from mailpile.mailutils.safe import safe_decode_hdr
-
+from mailpile.mailutils.vcal import calendar_parse
 
 GLOBAL_CONTENT_ID_LOCK = MboxLock()
 GLOBAL_CONTENT_ID = random.randint(0, 0xfffffff)
@@ -809,7 +810,7 @@ class Email(object):
                     removed.append(msg_ptr)
             except (IOError, OSError, ValueError, AttributeError) as e:
                 failed.append(msg_ptr)
-                print 'FIXME: Could not delete %s: %s' % (msg_ptr, e)
+                print('FIXME: Could not delete %s: %s' % (msg_ptr, e))
 
         if allow_deletion and not failed and not kept:
             self.index.delete_msg_at_idx_pos(session, self.msg_idx_pos,
@@ -1041,8 +1042,7 @@ class Email(object):
                 'count': count,
                 'length': len(payload),
                 'content-id': content_id,
-                'filename': pfn,
-            }
+                'filename': pfn}
             attributes['aid'] = self._attachment_aid(attributes)
             if pfn:
                 if '.' in pfn:
@@ -1116,7 +1116,7 @@ class Email(object):
                 want.extend(['text_parts', 'headers', 'attachments',
                              'addresses'])
 
-        for p in 'text_parts', 'html_parts', 'attachments':
+        for p in 'text_parts', 'html_parts', 'vcal_parts', 'attachments':
             if want is None or p in want:
                 tree[p] = []
 
@@ -1174,8 +1174,7 @@ class Email(object):
         for part in msg.walk():
             crypto = {
                 'signature': part.signature_info,
-                'encryption': part.encryption_info,
-            }
+                'encryption': part.encryption_info}
 
             mimetype = (part.get_content_type() or 'text/plain').lower()
             if (mimetype.startswith('multipart/')
@@ -1200,8 +1199,14 @@ class Email(object):
                         tree['html_parts'].append({
                             'charset': charset,
                             'type': 'html',
-                            'data': clean_html(payload)
-                        })
+                            'data': clean_html(payload),
+                            'count': count,
+                            'mimetype': mimetype,
+                            'aid': 'part-%d' % count})
+
+                elif mimetype == "text/calendar":
+                    if want is None or 'vcal_parts' in want:
+                        tree["vcal_parts"].extend(calendar_parse(payload))
 
                 elif want is None or 'text_parts' in want:
                     if start[:3] in ('<di', '<ht', '<p>', '<p ', '<ta', '<bo'):
@@ -1210,9 +1215,8 @@ class Email(object):
                     # the message is HTML only and we want the code below
                     # to try and extract meaning from it.
                     if (start or payload.strip()) != '':
-                        text_parts = self.parse_text_part(payload, charset,
-                                                          crypto)
-                        tree['text_parts'].extend(text_parts)
+                        tree['text_parts'].extend(self.parse_text_part(
+                            payload, charset, crypto, mimetype, count))
 
             elif want is None or 'attachments' in want:
                 filename_org = safe_decode_hdr(hdr=part.get_filename() or '')
@@ -1227,8 +1231,7 @@ class Email(object):
                     'length': len(part.get_payload(None, True) or ''),
                     'content-id': part.get('content-id', ''),
                     'filename': filename,
-                    'crypto': crypto
-                }
+                    'crypto': crypto}
                 att['aid'] = self._attachment_aid(att)
                 tree['attachments'].append(att)
                 if filename_org != filename:
@@ -1238,9 +1241,8 @@ class Email(object):
             if tree.get('html_parts') and not tree.get('text_parts'):
                 html_part = tree['html_parts'][0]
                 payload = extract_text_from_html(html_part['data'])
-                text_parts = self.parse_text_part(payload,
-                                                  html_part['charset'],
-                                                  crypto)
+                text_parts = self.parse_text_part(
+                    payload, html_part['charset'], crypto, None, None)
                 tree['text_parts'].extend(text_parts)
 
         if self.is_editable():
@@ -1290,7 +1292,7 @@ class Email(object):
         charset = part.get_content_charset() or None
         return self.decode_text(GetTextPayload(part), charset=charset)
 
-    def parse_text_part(self, data, charset, crypto):
+    def parse_text_part(self, data, charset, crypto, mimetype, count):
         psi = crypto['signature']
         pei = crypto['encryption']
         current = {
@@ -1298,9 +1300,7 @@ class Email(object):
             'charset': charset,
             'crypto': {
                 'signature': SignatureInfo(parent=psi),
-                'encryption': EncryptionInfo(parent=pei)
-            }
-        }
+                'encryption': EncryptionInfo(parent=pei)}}
         parse = []
         block = 'body'
         clines = []
@@ -1326,10 +1326,11 @@ class Email(object):
                     'charset': charset,
                     'crypto': {
                         'signature': SignatureInfo(parent=psi),
-                        'encryption': EncryptionInfo(parent=pei)
-                    }
-                }
+                        'encryption': EncryptionInfo(parent=pei)}}
                 parse.append(current)
+                if len(parse) == 1 and count and mimetype:
+                    current['aid'] = 'part-%d' % count
+                    current['mimetype'] = mimetype
             current['data'] += line
             clines.append(line)
         return parse
@@ -1439,8 +1440,8 @@ class Email(object):
                         pgpdata[1]['crypto']['signature'] = si
                         pgpdata[2]['data'] = ''
 
-                    except Exception, e:
-                        print e
+                    except Exception as e:
+                        print(e)
 
             if decrypt:
                 if part['type'] in ('pgpbegin', 'pgptext'):
@@ -1498,6 +1499,6 @@ if __name__ == "__main__":
     import sys
     results = doctest.testmod(optionflags=doctest.ELLIPSIS,
                               extraglobs={})
-    print '%s' % (results, )
+    print('%s' % (results, ))
     if results.failed:
         sys.exit(1)

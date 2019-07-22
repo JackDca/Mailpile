@@ -1,5 +1,7 @@
 # vim: set fileencoding=utf-8 :
 #
+from __future__ import print_function
+import lxml.etree
 import lxml.html
 import lxml.html.clean
 import re
@@ -58,12 +60,14 @@ def clean_html(html):
     return (SHARED_HTML_CLEANER.clean_html(html) if html else '')
 
 
-def extract_text_from_html(html):
+def extract_text_from_html(html, url_callback=None):
     try:
         # We compensate for some of the limitations of lxml...
         links, imgs = [], []
         def delink(m):
             url, txt = m.group(1), m.group(2).strip()
+            if url_callback is not None:
+                url_callback(url, txt)
             if txt[:4] in ('http', 'www.'):
                 return txt
             elif url.startswith('mailto:'):
@@ -97,7 +101,7 @@ def extract_text_from_html(html):
         if html:
             try:
                 html_text = lxml.html.fromstring(html).text_content()
-            except XMLSyntaxError:
+            except lxml.etree.Error:
                 html_text = _('(Invalid HTML suppressed)')
         else:
             html_text = ''
@@ -118,6 +122,6 @@ if __name__ == "__main__":
     import sys
     results = doctest.testmod(optionflags=doctest.ELLIPSIS,
                               extraglobs={})
-    print '%s' % (results, )
+    print('%s' % (results, ))
     if results.failed:
         sys.exit(1)

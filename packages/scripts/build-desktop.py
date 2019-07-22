@@ -5,6 +5,7 @@ build-desktop.py - Checkout and build Mailpile for desktop platforms (win/mac)
 Usage: build-desktop.py [clean] <nightly|release>
 
 """
+from __future__ import print_function
 import os
 import subprocess
 import sys
@@ -130,10 +131,10 @@ if __name__ == '__main__':
             git('pull', '--recurse-submodules', 'origin', branch,
                 _raise=ValueError)
 
-            if 'darwin' in sys.platform:
+            if sys.platform == 'darwin':
                 macOS_build(mailpile_tree, repo, branch, clean_build)
 
-            elif 'win' in sys.platform:
+            elif sys.platform.startswith('win'):
                 windows_build(mailpile_tree, repo, branch, clean_build)
 
             else:
