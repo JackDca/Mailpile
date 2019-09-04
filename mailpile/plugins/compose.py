@@ -78,6 +78,7 @@ def AddComposeMethods(cls):
                 self._ignore_exception()
 
         def _tagger(self, emails, untag, **kwargs):
+            print 'JJJJA', emails, untag, kwargs['type']  # *** DEBUG
             tag = self.session.config.get_tags(**kwargs)
             if tag and untag:
                 return self._untag_emails(emails, tag[0]._key)
@@ -96,6 +97,9 @@ def AddComposeMethods(cls):
         def _tag_sent(self, emails, untag=False):
             return self._tagger(emails, untag, type='sent')
 
+        def _tag_inbox(self, emails, untag=False):              # *** DEBUG
+            return self._tagger(emails, untag, type='inbox')    # *** DEBUG
+                                                                # *** DEBUG
         def _track_action(self, action_type, refs):
             session, idx = self.session, self._idx()
             for tag in session.config.get_tags(type=action_type):
@@ -1021,6 +1025,9 @@ class Update(CompositionCommand):
             self._tag_blank(emails, untag=True)
             self._tag_drafts(emails, untag=outbox)
             self._tag_outbox(emails, untag=(not outbox))
+            print 'JJJJB', config.prefs.outgoing_to_inbox   # *** DEBUG
+            if config.prefs.outgoing_to_inbox:              # *** DEBUG
+                self._tag_inbox(emails, untag=(not outbox)) # *** DEBUG
 
             if outbox:
                 self._create_contacts(emails)

@@ -158,7 +158,8 @@ CONFIG_RULES = {
         'default_route':   (_('Default outgoing mail route'), str, ''),
         'line_length':     (_('Target line length, <40 disables reflow'),
                             int, 65),
-        'always_bcc_self': (_('Always BCC self on outgoing mail'), bool, True),
+        'outgoing_to_inbox': (_('Put outgoing messages in Inbox'), bool, True),
+        'always_bcc_self': (_('Always BCC self on outgoing mail'), bool, False),
         'default_messageroute': (_('Default outgoing mail route'), str,    ''),
         'language':       p(_('User interface language'), str,             ''),
         'vcard':           [_("vCard import/export settings"), False, {
