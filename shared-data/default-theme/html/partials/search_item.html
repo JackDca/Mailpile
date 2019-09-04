@@ -6,6 +6,7 @@
 %}{%  set cleartext = show_text_part_encryption('none')
 %}{%  set unsigned = show_text_part_signature('none')
 %}{%  set to_cc = metadata.to_aids + metadata.cc_aids
+%}{%  set to1 = result.data.addresses[to_cc[0]]
 %}{%  set from = result.data.addresses[metadata.from.aid]
 %}{%  if not from
 %}{%    set from = {'fn': 'Unknown sender', 'email': ''}
@@ -132,9 +133,16 @@
     {%- include "partials/pile_threading.html" %}
   {%- endif %}
 {% else %}
-  <td class="avatar">
-    <a><img src="{{ show_avatar(from) }}"></a>
-  </td>
+  {%- if metadata.flags.from_me %}
+    <td class="avatar">
+      <a><img src="{{ show_avatar(to1) }}"></a>
+    </td>
+  {% else %}
+    <td class="avatar">
+      <a><img src="{{ show_avatar(from) }}"></a>
+    </td>
+  {% endif %}
+    
  {%- if to_cc and display_recipients %}
   {%- set to1 = result.data.addresses[to_cc[0]] %}
   <td class="to people" data-fn="{{metadata.from.fn}}" data-address="{{metadata.from.address}}">
@@ -163,7 +171,16 @@
  {%- set to1 = result.data.addresses[to_cc[0]] %}
  &lt;{{ to1.address }}&gt;{% if to_cc|length > 1 %} +{{ to_cc|length -1 }}{% endif %}
 {%- else %}({{_("unknown")}}){% endif %}">
-      {%- if metadata.from.fn %}{{ metadata.from.fn|nice_name(28) }}{% else %}({{_("No Name")}}){% endif %}
+      {%- if metadata.flags.from_me %}
+        <span class="icon icon-forward"></span> &nbsp
+        {%- if to1.fn %}{{ to1.fn|nice_name(28) }}
+        {% else %}(&lt;{{ to1.address }}&gt;)
+        {% endif %}
+      {%- elif metadata.from.fn %}
+        {{ metadata.from.fn|nice_name(28) }}
+      {% else %}
+        ({{_("No Name")}})
+      {% endif %}
       {%- if conversation_count > 1 %}<span class="conversation-count">{{conversation_count}}</span>{% endif %}
       {%- if metadata.flags.replied %}<span class="icon-reply"></span>{% else %}
       {%-   if metadata.flags.forwarded %}<span class="icon-forward"></span>{% endif %}

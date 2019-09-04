@@ -96,6 +96,9 @@ def AddComposeMethods(cls):
         def _tag_sent(self, emails, untag=False):
             return self._tagger(emails, untag, type='sent')
 
+        def _tag_inbox(self, emails, untag=False):
+            return self._tagger(emails, untag, type='inbox')
+
         def _track_action(self, action_type, refs):
             session, idx = self.session, self._idx()
             for tag in session.config.get_tags(type=action_type):
@@ -1021,6 +1024,8 @@ class Update(CompositionCommand):
             self._tag_blank(emails, untag=True)
             self._tag_drafts(emails, untag=outbox)
             self._tag_outbox(emails, untag=(not outbox))
+            if config.prefs.outgoing_to_inbox:
+                self._tag_inbox(emails, untag=(not outbox))
 
             if outbox:
                 self._create_contacts(emails)
