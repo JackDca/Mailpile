@@ -379,6 +379,12 @@ class MailpileMailbox(mailbox.mbox):
 
     def get_bytes(self, toc_id, *args, **kwargs):
         with self._lock:
+            # Demunge mbox file line starting with ">From " to avoid parser
+            # treating such lines in header as start of email body.
+            # return re.sub(r'^>(>*From )',r'\1',
+            #               self.get_file(toc_id).read(*args),
+            #              flags=re.M) 
+            # return self.get_file(toc_id).read(*args)
             return self.get_file(toc_id, *args, **kwargs).read()
 
     def get_file(self, *args, **kwargs):
