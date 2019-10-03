@@ -796,6 +796,9 @@ class MailIndex(BaseIndex):
                                msg_body=msg_body,
                                msg_size=msg_size,
                                msg_tags=tags)
+
+            self.tag_duplicates(session, msg_info)
+
             self.set_msg_at_idx_pos(msg_idx_pos, msg_info)
 
         self.set_conversation_ids(msg_info[self.MSG_MID], msg)
@@ -843,7 +846,65 @@ class MailIndex(BaseIndex):
         # Add normal tags implied by a rescan
         for tag_id in tags:
             self.add_tag(session, tag_id, msg_idxs=[email.msg_idx_pos])
+    
+    def tag_duplicates(self, session, msg_info):
+        """
+        Messages that have the same Message_ID as a previously indexed message
+        will not be indexed. This method identifies messages that have a
+        different Message_ID, but the same time (to the second), To:, From:,
+        and CC as a previously indexed message, and modifies tags accordingly.
+        """
+        try:           
+            # Check for duplicated BCCs to self if there is a user tag for them.            
+            duplicate_tags_keys = set(tag._key for tag in 
+                                    self.config.get_tags(name='SentBccSelf'))
+            if not duplicate_tags_keys:
+                return
+            # Select all messages in index with matching date (any time).
+            date_kw = '%x:u' % (long(msg_info[self.MSG_DATE],36) / (24 * 3600))
+            hit_date_msgs = GlobalPostingList(session, date_kw).hits()
+            hit_date_msgs -= set([msg_info[self.MSG_MID]])      
 
+            # Narrow down to messages with matching date/time, from, to and cc.
+            hit_all_msgs = set()
+            for h_msg_mid in hit_date_msgs:
+                h_msg_info = self.get_msg_at_idx_pos(int(h_msg_mid, 36))
+                if (h_msg_info[self.MSG_DATE] != msg_info[self.MSG_DATE] or
+                    h_msg_info[self.MSG_FROM] != msg_info[self.MSG_FROM] or 
+                    ( set(h_msg_info[self.MSG_TO].split(',')) !=
+                        set(msg_info[self.MSG_TO].split(','))   ) or
+                    ( set(h_msg_info[self.MSG_CC].split(',')) !=
+                        set(msg_info[self.MSG_CC].split(','))   )    ):
+                    continue
+                hit_all_msgs |= set([h_msg_mid])
+            
+            # Select messsages tagged Sent.
+            sent_tags_keys = set(tag._key for tag in 
+                                            self.config.get_tags(type='sent'))
+            hit_msgs = set()
+            for h_msg_mid in hit_all_msgs:
+                h_msg_info = self.get_msg_at_idx_pos(int(h_msg_mid, 36))
+                if set(h_msg_info[self.MSG_TAGS].split(',')) & sent_tags_keys:
+                    hit_msgs |= set([h_msg_mid])
+            
+            if not hit_msgs:
+                return
+            
+            # If incoming message is a duplicate of a message that is tagged Sent
+            # then untag incoming from Inbox and tag it Duplicate.
+            inbox_tags_keys = set(tag._key for tag in 
+                                            self.config.get_tags(type='inbox'))
+            
+            if not inbox_tags_keys:
+                return
+           
+            msg_info[self.MSG_TAGS] = msg_info[self.MSG_TAGS].replace(
+                            inbox_tags_keys.pop(), duplicate_tags_keys.pop() )
+        except:
+            pass
+                                        
+        return                                        
+                                  
     def set_conversation_ids(self, msg_mid, msg, subject_threading=True):
         """
         This method will calculate/update the thread-ID and parent-ID of a
