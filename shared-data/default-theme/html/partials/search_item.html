@@ -6,7 +6,11 @@
 %}{%  set cleartext = show_text_part_encryption('none')
 %}{%  set unsigned = show_text_part_signature('none')
 %}{%  set to_cc = metadata.to_aids + metadata.cc_aids
-%}{%  set to1 = result.data.addresses[to_cc[0]]
+%}{%  if not to_cc
+%}{%    set to1 = []
+%}{%  else
+%}{%    set to1 = result.data.addresses[to_cc[0]]
+%}{%  endif
 %}{%  set from = result.data.addresses[metadata.from.aid]
 %}{%  if not from
 %}{%    set from = {'fn': 'Unknown sender', 'email': ''}
