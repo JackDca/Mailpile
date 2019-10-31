@@ -1,5 +1,8 @@
+from __future__ import print_function
 # These are methods to do with MIME and crypto, implementing PGP/MIME.
 
+import math
+import random
 import re
 import StringIO
 import email.parser
@@ -147,7 +150,8 @@ def MimeReplacePart(part, newpart, keep_old_headers=False):
 
 
 def UnwrapMimeCrypto(part, protocols=None, psi=None, pei=None, charsets=None,
-                     unwrap_attachments=True, require_MDC=True, depth=0):
+                     unwrap_attachments=True, require_MDC=True,
+                     depth=0, sibling=0, efail_unsafe=False, allow_decrypt=True):
     """
     This method will replace encrypted and signed parts with their
     contents and set part attributes describing the security properties
@@ -195,7 +199,7 @@ def UnwrapMimeCrypto(part, protocols=None, psi=None, pei=None, charsets=None,
 
             # Reparent the contents up, removing the signature wrapper
             hdrs = MimeReplacePart(part, payload,
-                                   keep_old_headers='MH-Renamed')
+                                   keep_old_headers='PH-Renamed')
             part.signed_headers = hdrs
 
             # Try again, in case we just unwrapped another layer
@@ -207,7 +211,9 @@ def UnwrapMimeCrypto(part, protocols=None, psi=None, pei=None, charsets=None,
                              charsets=charsets,
                              unwrap_attachments=unwrap_attachments,
                              require_MDC=require_MDC,
-                             depth = depth + 1 )
+                             depth=depth+1, sibling=sibling,
+                             efail_unsafe=efail_unsafe,
+                             allow_decrypt=allow_decrypt)
 
         except (IOError, OSError, ValueError, IndexError, KeyError):
             part.signature_info = SignatureInfo()
@@ -216,8 +222,9 @@ def UnwrapMimeCrypto(part, protocols=None, psi=None, pei=None, charsets=None,
 
     elif part.is_multipart() and mimetype == 'multipart/encrypted':
         try:
+            if not allow_decrypt:
+                raise ValueError('Decryption forbidden, MIME structure is weird')
             preamble, payload = part.get_payload()
-
             (part.signature_info, part.encryption_info, decrypted) = (
                 crypto_cls().decrypt(
                     payload.as_string(), require_MDC=require_MDC))
@@ -235,9 +242,9 @@ def UnwrapMimeCrypto(part, protocols=None, psi=None, pei=None, charsets=None,
             hdrs = MimeReplacePart(part, newpart,
                                    keep_old_headers='MH-Renamed')
 
-            # Is there a Memory-Hole force-display part?
+            # Is there a Memory-Hole/Protected-Headers force-display part?
             pl = part.get_payload()
-            if hdrs and isinstance(pl, (list, )):
+            if hdrs and isinstance(pl, list):
                 if (pl[0]['content-type'].startswith('text/rfc822-headers;')
                         and 'protected-headers' in pl[0]['content-type']):
                     # Parse these headers as well and override the top level,
@@ -267,12 +274,23 @@ def UnwrapMimeCrypto(part, protocols=None, psi=None, pei=None, charsets=None,
                              charsets=charsets,
                              unwrap_attachments=unwrap_attachments,
                              require_MDC=require_MDC,
-                             depth = depth + 1 )
+                             depth=depth+1, sibling=sibling,
+                             efail_unsafe=efail_unsafe,
+                             allow_decrypt=allow_decrypt)
 
     # If we are still multipart after the above shenanigans (perhaps due
     # to an error state), recurse into our subparts and unwrap them too.
     elif part.is_multipart():
-        for sp in part.get_payload():
+        for count, sp in enumerate(part.get_payload()):
+            # EFail mitigation: We decrypt attachments and the first part
+            # of a nested multipart structure, but not any subsequent parts.
+            # This allows rewriting of messages to *append* cleartext, but
+            # disallows rewriting that pushes "inline" encrypted content
+            # further down to where the recipient might not notice it.
+            sp_disp = (unwrap_attachments and sp['content-disposition']) or ""
+            allow_decrypt = (efail_unsafe
+                    or (count == sibling == 0)
+                    or sp_disp.startswith('attachment')) and allow_decrypt
             UnwrapMimeCrypto(sp,
                              protocols=protocols,
                              psi=part.signature_info,
@@ -280,7 +298,9 @@ def UnwrapMimeCrypto(part, protocols=None, psi=None, pei=None, charsets=None,
                              charsets=charsets,
                              unwrap_attachments=unwrap_attachments,
                              require_MDC=require_MDC,
-                             depth = depth + 1 )
+                             depth=depth+1, sibling=count,
+                             efail_unsafe=efail_unsafe,
+                             allow_decrypt=allow_decrypt)
 
     elif disposition.startswith('attachment'):
         # The sender can attach signed/encrypted/key files without following
@@ -298,6 +318,8 @@ def UnwrapMimeCrypto(part, protocols=None, psi=None, pei=None, charsets=None,
             # are encrypted and signed, and files that are signed only.
             payload = part.get_payload( None, True )
             try:
+                if not allow_decrypt:
+                    raise ValueError('Decryption forbidden, MIME structure is weird')
                 (part.signature_info, part.encryption_info, decrypted) = (
                     crypto_cls().decrypt(
                         payload, require_MDC=require_MDC))
@@ -329,7 +351,9 @@ def UnwrapMimeCrypto(part, protocols=None, psi=None, pei=None, charsets=None,
                                  charsets=charsets,
                                  unwrap_attachments=unwrap_attachments,
                                  require_MDC=require_MDC,
-                                 depth = depth + 1 )
+                                 depth=depth+1, sibling=sibling,
+                                 efail_unsafe=efail_unsafe,
+                                 allow_decrypt=allow_decrypt)
             else:
                 # FIXME: Best action for unsuccessful attachment processing?
                 pass
@@ -341,7 +365,9 @@ def UnwrapMimeCrypto(part, protocols=None, psi=None, pei=None, charsets=None,
                                      pei=pei,
                                      charsets=charsets,
                                      require_MDC=require_MDC,
-                                     depth = depth + 1 )
+                                     depth=depth+1, sibling=sibling,
+                                     efail_unsafe=efail_unsafe,
+                                     allow_decrypt=allow_decrypt)
 
     else:
         # FIXME: This is where we would handle cryptoschemes that don't
@@ -359,7 +385,9 @@ def UnwrapMimeCrypto(part, protocols=None, psi=None, pei=None, charsets=None,
 
 
 def UnwrapPlainTextCrypto(part, protocols=None, psi=None, pei=None,
-                                charsets=None, require_MDC=True, depth=0):
+                                charsets=None, require_MDC=True,
+                                depth=0, sibling=0,
+                                efail_unsafe=False, allow_decrypt=True):
     """
     This method will replace encrypted and signed parts with their
     contents and set part attributes describing the security properties
@@ -374,6 +402,8 @@ def UnwrapPlainTextCrypto(part, protocols=None, psi=None, pei=None,
         if (payload.startswith(crypto.ARMOR_BEGIN_ENCRYPTED) and
                 payload.endswith(crypto.ARMOR_END_ENCRYPTED)):
             try:
+                if not allow_decrypt:
+                    raise ValueError('Decryption forbidden, MIME structure is weird')
                 si, ei, text = crypto.decrypt(payload, require_MDC=require_MDC)
                 _update_text_payload(part, text, charsets=charsets)
             except (IOError, OSError, ValueError, IndexError, KeyError):
@@ -405,7 +435,7 @@ def ObscureSubject(subject):
     """
     Replace the Subject line with something nondescript.
     """
-    return '(%s)' % _("Subject unavailable")
+    return '...'
 
 
 def ObscureNames(hdr):
@@ -458,7 +488,7 @@ OBSCURE_HEADERS_MILD = {
 # that will obscure as much of the metadata from the public header as
 # possible. This is only useful with encrypted messages and will badly
 # break things unless the recipient is running an MUA that fully implements
-# Memory Hole.
+# Memory Hole / Protected Headers.
 OBSCURE_HEADERS_EXTREME = {
     'subject': ObscureSubject,
     'from': ObscureSender,
@@ -656,7 +686,9 @@ class MimeSigningWrapper(MimeWrapper):
     def __init__(self, *args, **kwargs):
         MimeWrapper.__init__(self, *args, **kwargs)
 
-        name = 'signature.html' if self.use_html_wrapper else 'signature.asc'
+        name = ('OpenPGP-digital-signature.html'
+                if self.use_html_wrapper else
+                'OpenPGP-digital-signature.asc')
         self.sigblock = MIMEBase(*self.SIGNATURE_TYPE.split('/'))
         self.sigblock.set_param("name", name)
         for h, v in (("Content-Description", self.SIGNATURE_DESC),
@@ -742,7 +774,7 @@ class MimeEncryptingWrapper(MimeWrapper):
 
         self.enc_data = MIMEBase('application', 'octet-stream')
         for h, v in (("Content-Disposition",
-                      "attachment; filename=\"msg.asc\""), ):
+                      "attachment; filename=\"OpenPGP-encrypted-message.asc\""), ):
             self.enc_data.add_header(h, v)
 
         self.attach(self.version)
@@ -755,6 +787,15 @@ class MimeEncryptingWrapper(MimeWrapper):
     def _update_crypto_status(self, part):
         part.encryption_info.part_status = 'decrypted'
 
+    def _add_padding(self, text, chunksize=None):
+        """Add up to 16kB of whitespace to the end of a message as padding."""
+        if chunksize is None:
+            chunksize = min(max(160, 2 ** int(math.log(len(text), 2))), 8192)
+        pad = ('\r\n' + (' ' * 78)) * int(chunksize / 80)
+        return (text
+            + (pad if random.randint(0, 1) else '')
+            + (pad[:chunksize - (len(text) % chunksize)]))
+
     def wrap(self, msg, prefer_inline=False):
         to_keys = set(self.get_keys(self.recipients + [self.sender]))
 
@@ -764,7 +805,10 @@ class MimeEncryptingWrapper(MimeWrapper):
             prefer_inline = False
 
         if prefer_inline is not False:
-            message_text = Normalize(prefer_inline.get_payload(None, True))
+            message_text = self._add_padding(
+                Normalize(prefer_inline.get_payload(None, True)),
+                # This padding is user facing, so don't overdo it.
+                chunksize=160)
             status, enc = self._encrypt(message_text,
                                         tokeys=to_keys,
                                         armor=True)
@@ -778,7 +822,7 @@ class MimeEncryptingWrapper(MimeWrapper):
             if self.cleaner:
                 self.cleaner(msg)
 
-            message_text = self.flatten(msg)
+            message_text = self._add_padding(self.flatten(msg))
             status, enc = self._encrypt(message_text,
                                         tokeys=to_keys,
                                         armor=True)
@@ -798,6 +842,6 @@ if __name__ == "__main__":
     #        we don't have such tests. :-(
 
     results = doctest.testmod(optionflags=doctest.ELLIPSIS)
-    print '%s' % (results, )
+    print('%s' % (results, ))
     if results.failed:
         sys.exit(1)

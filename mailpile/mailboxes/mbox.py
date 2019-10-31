@@ -1,3 +1,4 @@
+from __future__ import print_function
 import errno
 import mailbox
 import os
@@ -23,15 +24,16 @@ class MailpileMailbox(mailbox.mbox):
         '^(X-)?Status:\s*\S+', flags=re.IGNORECASE|re.MULTILINE)
 
     @classmethod
-    def parse_path(cls, config, fn, create=False):
+    def parse_path(cls, config, fn, create=False, allow_empty=False):
         try:
             firstline = open(fn, 'r').readline()
             if firstline.startswith('From '):
                 return (fn, )
-        except:
-            if create and not os.path.exists(fn):
+            if (allow_empty or create) and not firstline:
                 return (fn, )
-            pass
+        except:
+            if create and os.path.exists(fn):
+                return (fn, )
         raise ValueError('Not an mbox: %s' % fn)
 
     def __init__(self, *args, **kwargs):
@@ -81,7 +83,7 @@ class MailpileMailbox(mailbox.mbox):
                 if not os.path.exists(self._path):
                     raise NoSuchMailboxError(self._path)
                 self._file = self._get_fd()
-            except IOError, e:
+            except IOError as e:
                 if e.errno == errno.ENOENT:
                     raise NoSuchMailboxError(self._path)
                 elif e.errno == errno.EACCES:
@@ -131,7 +133,7 @@ class MailpileMailbox(mailbox.mbox):
             data = ''
             start = None
             len_nl = 1
-            while True:
+            while (cur_length > 0):
                 self._last_updated = time.time()
                 line_pos = fd.tell()
                 line = fd.readline()
@@ -416,7 +418,7 @@ Content-Length: %(length)s
              tf.write("\n")
         tf.flush()
         if verbose or wait:
-            print 'Temporary mailbox in: %s' % tf.name
+            print('Temporary mailbox in: %s' % tf.name)
         if wait:
             raw_input('Press ENTER to continue...')
 
@@ -431,8 +433,8 @@ Content-Length: %(length)s
              f2size = len(mmbx.get_file_by_ptr(msg_ptr, from_=True).read())
              result = 'ok' if (o_size == c_size == f_size == f2size) else 'BAD'
              if verbose or result != 'ok':
-                 print "%-3.3s [%s/%s/%s] %s ?= %s ?= %s ?= %s" % (
-                     result, i, key, msg_ptr, o_size, c_size, f_size, f2size)
+                 print("%-3.3s [%s/%s/%s] %s ?= %s ?= %s ?= %s" % (
+                     result, i, key, msg_ptr, o_size, c_size, f_size, f2size))
              if result != 'ok':
                  problems += 1
              tests += 1
@@ -472,7 +474,7 @@ Content-Length: %(length)s
                 print('ok  Message %s found in new location' % msg_ptr)
 
         # This is formatted to look like doctest results...
-        print 'TestResults(failed=%d, attempted=%d)' % (problems, tests)
+        print('TestResults(failed=%d, attempted=%d)' % (problems, tests))
         if wait:
             raw_input('Tests finished. Press ENTER to clean up...')
 

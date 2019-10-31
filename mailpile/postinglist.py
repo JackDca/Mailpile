@@ -1,3 +1,4 @@
+from __future__ import print_function
 import os
 import sys
 import random
@@ -48,7 +49,7 @@ def PLC_CACHE_FlushAndClean(session, min_changes=0, keep=5, runtime=None):
     def remove(ts, plc):
         with PLC_CACHE_LOCK:
             if plc.sig in PLC_CACHE and ts == PLC_CACHE[plc.sig][0]:
-               del PLC_CACHE[plc.sig]
+                del PLC_CACHE[plc.sig]
 
     startt = int(time.time())
     expire = startt - max(30, 300 - len(PLC_CACHE))
@@ -85,16 +86,22 @@ class PostingListContainer(object):
     @classmethod
     def Load(cls, session, sig, uncached_cb=None):
         fn, sig = cls._GetFilenameAndSig(session.config, sig)
-        found = plc = None
+        plc = None
         with PLC_CACHE_LOCK:
             if sig in PLC_CACHE:
-                found = PLC_CACHE[sig][0] = int(time.time())
-            else:
-                PLC_CACHE[sig] = [int(time.time()), cls(session, sig)]
-            plc = PLC_CACHE[sig][1]
-        if uncached_cb and not found:
-            uncached_cb()
-        return plc
+                PLC_CACHE[sig][0] = int(time.time())
+                plc = PLC_CACHE[sig][1]
+        if plc is None:
+            plc = cls(session, sig)  # Unlocked: stalled loads would deadlock
+            with PLC_CACHE_LOCK:
+                PLC_CACHE[sig] = [int(time.time()), plc]
+            if uncached_cb:
+                uncached_cb()
+        # We return the cached version no matter what, in case a race above
+        # had us loading the same posting-list twice: we want to be sure
+        # calling code gets the shared object.
+        with PLC_CACHE_LOCK:
+            return PLC_CACHE[sig][1]
 
     def __init__(self, session, sig, fd=None):
         self.session = session
@@ -593,7 +600,7 @@ class GlobalPostingList(OldPostingList):
         starttime = time.time()
         count = 0
         global GLOBAL_GPL
-        if (GLOBAL_GPL and (not lazy or len(GLOBAL_GPL) > 5*1024)):
+        if (GLOBAL_GPL and (not lazy or len(GLOBAL_GPL) > 50*1024)):
             # Processing keys in order is more efficient, as it lets things
             # accumulate in the PLC_CACHE.
             keys = sorted(GLOBAL_GPL.keys())

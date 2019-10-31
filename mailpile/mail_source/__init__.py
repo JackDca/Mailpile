@@ -117,8 +117,9 @@ class BaseMailSource(threading.Thread):
         self._interrupt = None
         self._rescanning = False
         self._rescan_waiters = []
+        self._rescan_forced = False
         self._loop_count = 0
-        self._last_rescan_count = 0
+        self._last_rescan_count = (0, 0)
         self._last_rescan_completed = False
         self._last_rescan_failed = False
         self._last_saved = time.time()  # Saving right away would be silly
@@ -254,31 +255,33 @@ class BaseMailSource(threading.Thread):
     def sync_mail(self):
         """Iterates through all the mailboxes and scans if necessary."""
         config = self.session.config
-        self._last_rescan_count = rescanned = errors = 0
+        rescanned = messages = errors = 0
+        self._last_rescan_count = (0, 0)
         self._last_rescan_completed = False
         self._last_rescan_failed = False
         self._interrupt = None
         batch = min(self._loop_count * 20, self.RESCAN_BATCH_SIZE)
         errors = rescanned = 0
         all_completed = True
+        ostate = self._state
 
-        if not self._check_interrupt():
+        if not self._check_interrupt(clear=False):
             self._state = 'Waiting... (disco)'
             discovered = self.discover_mailboxes()
         else:
             discovered = 0
 
-        ostate = self._state
         plan = self._sorted_mailboxes()
         self.event.data['plan'] = [[m._key, _('Pending'), m.name] for m in plan]
         event_plan = dict((mp[0], mp) for mp in self.event.data['plan'])
-        if plan and random.randint(0, 10) == 1:
+        if plan and random.randint(0, 20) == 1:
             random_plan = [m._key for m in random.sample(plan, 1)]
         else:
             random_plan = []
 
         for mbx_cfg in plan:
-            play_nice_with_threads(weak=True)
+            if not self._rescan_forced:
+                play_nice_with_threads(weak=True)
 
             if self._check_interrupt(clear=False):
                 all_completed = False
@@ -302,6 +305,7 @@ class BaseMailSource(threading.Thread):
                     event_plan[mbx_cfg._key][1] = _('Postponed')
 
                 elif (self._has_mailbox_changed(mbx_cfg, state) or
+                        self._rescan_forced or
                         mbx_cfg.local == '!CREATE' or
                         mbx_cfg._key in random_plan):
                     event_plan[mbx_cfg._key][1] = _('Working ...')
@@ -319,6 +323,7 @@ class BaseMailSource(threading.Thread):
                                         ]['indexed_messages'] += count
                         batch -= count
                         this_batch -= count
+                        messages += count
                         complete = ((count == 0 or this_batch > 0) and
                                     not self._interrupt and
                                     not mailpile.util.QUITTING)
@@ -361,6 +366,7 @@ class BaseMailSource(threading.Thread):
             except Exception as e:
                 event_plan[mbx_cfg._key][1] = '%s: %s' % (
                     _('Internal error'), e)
+                self._rescan_forced = False
                 self._last_rescan_failed = True
                 self._log_status(_('Internal error'))
                 raise
@@ -380,8 +386,9 @@ class BaseMailSource(threading.Thread):
             status.append(_('No new mail at %s'
                             ) % datetime.datetime.today().strftime('%H:%M'))
 
+        self._rescan_forced = False
         self._log_status(', '.join(status))
-        self._last_rescan_count = rescanned
+        self._last_rescan_count = (messages, rescanned)
         self._state = ostate
         return rescanned
 
@@ -393,6 +400,10 @@ class BaseMailSource(threading.Thread):
 
     def _sleep(self, seconds):
         enabled = self.my_config.enabled
+        if self._rescan_forced:
+            seconds = 0
+        else:
+            play_nice_with_threads()
         if 'sources' in self.session.config.sys.debug:
             self.session.ui.debug('Sleeping up to %d seconds...' % seconds)
         if self._sleeping is None:
@@ -402,10 +413,9 @@ class BaseMailSource(threading.Thread):
                     self._sleeping_is_ok(seconds - self._sleeping) and
                     (enabled == self.my_config.enabled) and
                     not mailpile.util.QUITTING):
-                time.sleep(min(1, self._sleeping))
+                time.sleep(max(0, min(1, self._sleeping)))
                 self._sleeping -= 1
         self._sleeping = None
-        play_nice_with_threads()
         return (self.alive and not mailpile.util.QUITTING)
 
     def _existing_mailboxes(self):
@@ -781,8 +791,7 @@ class BaseMailSource(threading.Thread):
             'copied_messages': 0,
             'copied_bytes': 0,
             'deleting': False,
-            'complete': False
-        }
+            'complete': False}
         scan_args = scan_args or {}
         policy = self._policy(mbx_cfg)
         count = 0
@@ -860,8 +869,7 @@ class BaseMailSource(threading.Thread):
                 'total': len(src_keys),
                 'total_local': len(loc_keys),
                 'uncopied': len(keys),
-                'batch_size': stop_after if (stop_after > 0) else len(keys)
-            })
+                'batch_size': stop_after if (stop_after > 0) else len(keys)})
 
             # Go download!
             key_errors = []
@@ -915,8 +923,8 @@ class BaseMailSource(threading.Thread):
             progress['raised'] = True
             raise
         finally:
-            src.unlock()
             progress['running'] = False
+            src.unlock()
 
         maybe_delete_from_server(loc, src)
         return count
@@ -963,8 +971,7 @@ class BaseMailSource(threading.Thread):
                 'process_new': (process_new if mbx_cfg.process_new else False),
                 'apply_tags': (apply_tags or []),
                 'stop_after': stop_after,
-                'event': self.event
-            }
+                'event': self.event}
             copied = count = 0
 
             if mbx_cfg.local or self.my_config.discovery.local_copy:
@@ -990,7 +997,7 @@ class BaseMailSource(threading.Thread):
             self._log_status(_('Updating search engine for %s'
                                ) % self._mailbox_name(path))
             # Wait for background message scans to complete...
-            config.scan_worker.do(session, 'Wait', lambda: 1)
+            config.scan_worker.do(session, 'Wait:%s' % path, lambda: 1)
 
             if 'rescans' in self.event.data:
                 self.event.data['rescans'][:-mailboxes] = []
@@ -999,6 +1006,7 @@ class BaseMailSource(threading.Thread):
                                                      mbx_key,
                                                      mbx_cfg.local or path,
                                                      config.open_mailbox,
+                                                     force=self._rescan_forced,
                                                      **scan_mailbox_args)
         except ValueError:
             session.ui.debug(traceback.format_exc())
@@ -1147,13 +1155,15 @@ class BaseMailSource(threading.Thread):
 
     def rescan_now(self, session=None, started_callback=None):
         if not self.my_config.enabled:
-            return
+            return (0, 0)
 
         begin, end = MSrcLock(), MSrcLock()
         for l in (begin, end):
             l.acquire()
         try:
             self._rescan_waiters.append((begin, end, session))
+            self._rescan_forced = True
+            self._interrupt = 'Rescan forced'
             self.wake_up()
             while not begin.acquire(False):
                 time.sleep(1)

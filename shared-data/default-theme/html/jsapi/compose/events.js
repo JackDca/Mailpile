@@ -38,6 +38,11 @@ Mailpile.Composer.ToggleEncryption = function(mid, want) {
   }
 
   Mailpile.Composer.Crypto.EncryptionToggle(change, mid, 'manual');
+  if (change == 'encrypt') {
+    // Encrypting without signing makes little sense; yes this makes
+    // things annoying for those who disagree.
+    Mailpile.Composer.Crypto.SignatureToggle('sign', mid, 'manual');
+  }
   Mailpile.Composer.Tooltips.Encryption();
   return false;
 };
@@ -108,22 +113,22 @@ Mailpile.Composer.SendMessage = function(send_btn) {
   }
 
   if (action === 'send') {
-	  var action_url     = Mailpile.api.compose_send;
-	  var action_status  = 'success';
-	  var action_message = 'Your message was sent <a id="status-undo-link" data-action="undo-send" href="#">undo</a>';
-    var done_working = Mailpile.notify_working("{{_('Preparing to send...')|escapejs}}", 100);
+    var action_url     = Mailpile.api.compose_send;
+    var action_status  = 'success';
+    var action_message = 'Your message was sent <a id="status-undo-link" data-action="undo-send" href="#">undo</a>';
+    var done_working = Mailpile.notify_working("{{_('Preparing to send...')|escapejs}}", 100, 'blank');
   }
   else if (action == 'save') {
-	  var action_url     = Mailpile.api.compose_save;
-	  var action_status  = 'info';
-	  var action_message = 'Your message was saved';
+    var action_url     = Mailpile.api.compose_save;
+    var action_status  = 'info';
+    var action_message = 'Your message was saved';
     var done_working = Mailpile.notify_working("{{_('Saving...')|escapejs}}", 500);
   }
   else if (action == 'reply') {
-	  var action_url     = Mailpile.api.compose_send;
-	  var action_status  = 'success';
-	  var action_message = 'Your reply was sent';
-    var done_working = Mailpile.notify_working("{{_('Preparing to send...')|escapejs}}", 100);
+    var action_url     = Mailpile.api.compose_send;
+    var action_status  = 'success';
+    var action_message = 'Your reply was sent';
+    var done_working = Mailpile.notify_working("{{_('Preparing to send...')|escapejs}}", 100, 'blank');
   }
 
   // FIXME: Use Mailpile.API instead of this.

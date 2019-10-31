@@ -61,11 +61,15 @@ EventLog.poll = function() {
   // 3) Other tabs may rely on us putting things in localStorage that we
   //    ourselves don't care about.
   //
+  //time for server to wait for new events
+  var waittime = 30;
+  //extra time to account for processing time on backend
+  var buffer = 5;
   EventLog.request({
     since: EventLog.last_ts,
     gather: (EventLog.last_ts < 0) ? 0.2 : 1.0,
-    wait: 30,
-    _timeout: (Mailpile.ajax_timeout * 3)
+    wait: waittime,
+    _timeout: (waittime+buffer)*1000
   });
 };
 
@@ -258,4 +262,17 @@ $(document).ready(function () {
     }
   }, false);
   window.setTimeout(EventLog.clear_old_events, EventLog.TIMEOUT_CHECK_OLD_EVENTS * 1000);
+});
+
+/* Notification - Undo */
+$(document).on('click', '.eventlog-undo', function() {
+  var event_id = $(this).data('event_id');
+  Mailpile.API.logs_events_undo_post({ event_id: event_id }, function(result) {
+    if (result.status === 'success') {
+      window.location.reload(true);
+    }
+    else {
+      alert("{{ _('Oops. Mailpile failed to complete your task.') }}");
+    }
+  });
 });

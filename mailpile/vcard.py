@@ -1,3 +1,4 @@
+from __future__ import print_function
 import random
 import threading
 import time
@@ -8,6 +9,8 @@ import mailpile.util
 from mailpile.i18n import gettext as _
 from mailpile.i18n import ngettext as _n
 from mailpile.util import *
+
+GLOBAL_VCARD_LOCK = VCardRLock()
 
 
 class VCardLine(dict):
@@ -30,9 +33,9 @@ class VCardLine(dict):
     'FN:Lebowski'
 
     The object mostly behaves like a read-only dict.
-    >>> print vcl
+    >>> print(vcl)
     {u'fn': u'Lebowski'}
-    >>> print vcl.value
+    >>> print(vcl.value)
     Lebowski
 
     VCardLine objects can also be initialized by passing in a line of VCard
@@ -47,7 +50,7 @@ class VCardLine(dict):
 
     Note that the as_vcardline() method may return more than one actual line
     of text, as RFC6350 mandates that lines over 75 characters be wrapped:
-    >>> print VCardLine(name='bogus', value=('B' * 100)+'C').as_vcardline()
+    >>> print(VCardLine(name='bogus', value=('B' * 100)+'C').as_vcardline())
     BOGUS:BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB
      BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBC
     """
@@ -164,7 +167,7 @@ class VCardLine(dict):
         """
         Quote values so they can be safely represented in a VCard.
 
-        >>> print VCardLine.Quote('Comma, semicolon; backslash\\ newline\\n')
+        >>> print(VCardLine.Quote('Comma, semicolon; backslash\\ newline\\n'))
         Comma\\, semicolon\\; backslash\\\\ newline\\n
         """
         return unicode(''.join([self.QUOTE_MAP.get(c, c) for c in text]))
@@ -352,6 +355,12 @@ class SimpleVCard(object):
 
     UNREMOVABLE = ('x-mailpile-rid', 'x-mailpile-kind-hint',
                    'clientpidmap', 'version')
+
+    def __enter__(self, *args, **kwargs):
+        return GLOBAL_VCARD_LOCK.__enter__(*args, **kwargs)
+
+    def __exit__(self, *args, **kwargs):
+        return GLOBAL_VCARD_LOCK.__exit__(*args, **kwargs)
 
     def remove(self, *line_ids):
         """
@@ -582,7 +591,7 @@ class SimpleVCard(object):
            ...
         IndexError: ...
 
-        >>> print vc.as_vCard()
+        >>> print(vc.as_vCard())
         BEGIN:VCARD
         VERSION:4.0
         CLIENTPIDMAP:1\\;thisisauid
@@ -726,7 +735,7 @@ class SimpleVCard(object):
         This method returns the VCard data in its native format.
         Note: the output is a string of bytes, not unicode characters.
 
-        >>> print SimpleVCard().as_vCard()
+        >>> print(SimpleVCard().as_vCard())
         BEGIN:VCARD
         VERSION:4.0
         FN:Anonymous
@@ -1013,6 +1022,11 @@ class MailpileVCard(SimpleVCard):
         lambda self, v: self._vcard_set('key',
             'data:application/x-pgp-fingerprint,' + v))
 
+    pgp_key_pinned = property(
+        lambda self: (
+            self._vcard_get('x-mailpile-pgpkey-pinned', '')[:1].lower() in ('t', 'y')),
+        lambda self, v: self._vcard_set('x-mailpile-pgpkey-pinned', v))
+
     pgp_key_shared = property(
         lambda self: self._vcard_get('x-mailpile-last-pgp-key-share'),
         lambda self, v: self._vcard_set('x-mailpile-last-pgp-key-share', v))
@@ -1223,6 +1237,12 @@ class VCardStore(dict):
         self.loading = False
         self.loaded = False
         self._lock = VCardRLock()
+
+    def __enter__(self, *args, **kwargs):
+        return GLOBAL_VCARD_LOCK.__enter__(*args, **kwargs)
+
+    def __exit__(self, *args, **kwargs):
+        return GLOBAL_VCARD_LOCK.__exit__(*args, **kwargs)
 
     def index_vcard(self, card, collision_callback=None):
         attrs = (['email'] if (card.kind in self.KINDS_PEOPLE)
@@ -1633,6 +1653,6 @@ if __name__ == "__main__":
         rules=mailpile.config.defaults.CONFIG_RULES)
     results = doctest.testmod(optionflags=doctest.ELLIPSIS,
                               extraglobs={'cfg': cfg})
-    print '%s' % (results, )
+    print('%s' % (results, ))
     if results.failed:
         sys.exit(1)

@@ -6,6 +6,7 @@ security related decisions made by the app, in order to facilitate
 review and testing.
 
 """
+from __future__ import print_function
 import copy
 import hashlib
 import json
@@ -172,9 +173,11 @@ def forbid_config_change(config, config_key):
 
 ##[ Securely download content from the web ]#################################
 
-def secure_urlget(session, url, data=None, timeout=30, anonymous=False):
+def secure_urlget(session, url,
+                  data=None, timeout=30, anonymous=False, maxbytes=None,
+                  padding=True):
     from mailpile.conn_brokers import Master as ConnBroker
-    from urllib2 import urlopen
+    from urllib2 import build_opener
 
     if session.config.prefs.web_content not in ("on", "anon"):
         raise IOError("Web content is disabled by policy")
@@ -182,7 +185,16 @@ def secure_urlget(session, url, data=None, timeout=30, anonymous=False):
     if url[:5].lower() not in ('http:', 'https'):
         raise IOError('Non-HTTP URLs are forbidden: %s' % url)
 
-    if url.startswith('https:'):
+    # User Agent forging and padding...
+    ffrv = int(time.time() / (7 * 24 * 3600 * 4)) - 649 + 60
+    headers = [
+        ('User-Agent', (
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:%s.0) Gecko/20100101 Firefox/%s.0'
+            % (ffrv, ffrv)))]
+    if padding:
+        headers.append(('X-Pad', 'PA%sD' % ('A' * (160 - len(url) % 160))))
+
+    if url[:6].lower() == 'https:':
         conn_need, conn_reject = [ConnBroker.OUTGOING_HTTPS], []
     else:
         conn_need, conn_reject = [ConnBroker.OUTGOING_HTTP], []
@@ -191,8 +203,12 @@ def secure_urlget(session, url, data=None, timeout=30, anonymous=False):
         conn_reject += [ConnBroker.OUTGOING_TRACKABLE]
 
     with ConnBroker.context(need=conn_need, reject=conn_reject) as ctx:
+        url_opener = build_opener()
+        url_opener.addheaders = headers
         # Flagged #nosec, because the URL scheme is constrained above
-        return urlopen(url, data=None, timeout=timeout).read()  # nosec
+        fd = url_opener.open(url, None, timeout=timeout)  # nosec
+
+    return fd.read(maxbytes)
 
 
 ##[ Common web-server security code ]########################################
@@ -750,6 +766,6 @@ if __name__ == "__main__":
     import doctest
     import sys
     result = doctest.testmod(optionflags=doctest.ELLIPSIS)
-    print '%s' % (result, )
+    print('%s' % (result, ))
     if result.failed:
         sys.exit(1)

@@ -37,6 +37,10 @@
             "name": "hacks/metadata"
         },
         {
+            "class": "EditMetadata",
+            "name": "hacks/metadata/edit"
+        },
+        {
             "class": "ViewKeywords",
             "name": "hacks/keywords"
         },
@@ -51,6 +55,10 @@
         {
             "class": "CheckMailbox",
             "name": "hacks/chkmbx"
+        },
+        {
+            "class": "FakeSendingDates",
+            "name": "hacks/fakedates"
         }
     ]
 }

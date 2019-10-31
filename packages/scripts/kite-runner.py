@@ -4,6 +4,7 @@
 kite-runner.py  - XMLRPC-based script launcher with PageKite integration.
 
 """
+from __future__ import print_function
 import getopt
 import json
 import os
@@ -239,6 +240,7 @@ class BuildbotServer(object):
 
     def subprocess_env(self):
         env = os.environ.copy()
+        env['HOME'] = os.getenv('HOME', os.path.expanduser('~'))
         env['PATH'] = os.getenv('PATH')
         for path in self.bin_path:
             env['PATH'] = '%s%s%s' % (path, os.pathsep, env['PATH'])
