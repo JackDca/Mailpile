@@ -721,11 +721,23 @@ class MailIndex(BaseIndex):
         return msg_to, msg_cc, msg_subj
 
     # FIXME: Finish merging this function with the one below it...
-    def _extract_info_and_index(self, session, mailbox_idx,
+    def _extract_info_and_index(self, session, msg_idx_pos, msg_info,
+                                mailbox_idx,
                                 msg_mid, msg_id,
                                 msg_size, msg, msg_metadata_kws,
                                 default_date,
-                                **index_kwargs):
+                                process_new = None,
+                                apply_tags = None,
+                                incoming = False):
+                                
+        # Note that as of b58e4af 2019-10-15 _extract_info_and_index
+        # is called from only two places in Mailpile namely
+        # _index_incoming_message() and index_email()
+        # and in both places the call is immediately followed by
+        # calls to edit_msg_info(), set_msg_at_idx_pos() and (with some
+        # complications) by set_conversation_ids().
+        # The only kwargs entry is incoming from both, and
+        # process_new and apply_tags from _index_incoming_message().
 
         msg_ts = self._extract_date_ts(session, msg_mid, msg_id, msg,
                                        default_date)
@@ -738,16 +750,36 @@ class MailIndex(BaseIndex):
                                     mailbox=mailbox_idx,
                                     compact=False,
                                     filter_hooks=filters,
-                                    **index_kwargs)
-
+                                    process_new = process_new,
+                                    apply_tags = apply_tags,
+                                    incoming = incoming)
+ 
         snippet_max = session.config.sys.snippet_max
         self.truncate_body_snippet(bi, max(0, snippet_max - len(msg_subj)))
         msg_body = self.encode_body(bi)
 
-        tags = [k.split(':')[0] for k in kw
-                if k.endswith(':in') or k.endswith(':tag')]
+        size = None
+        tags = None
+            
+        msg_tags = [k.split(':')[0] for k in kw
+            if k.endswith(':in') or k.endswith(':tag')]
+        if incoming:
+            size = msg_size
+            tags = msg_tags
+                
+        # Finally, update the metadata index with whatever we learned
+        self.edit_msg_info(msg_info,
+                           msg_ts=msg_ts,
+                           msg_from=safe_decode_hdr(msg, 'from'),
+                           msg_to=msg_to,
+                           msg_cc=msg_cc,
+                           msg_subject=msg_subj,
+                           msg_body=msg_body,
+                           msg_size=size,       # Not set by index_email().
+                           msg_tags=tags)       # Not set by index_email().
+        self.set_msg_at_idx_pos(msg_idx_pos, msg_info)
 
-        return (msg_ts, msg_to, msg_cc, msg_subj, msg_body, tags)
+        return (msg_info, msg_tags)
 
     def _index_incoming_message(self, session,
                                 msg_id, msg_ptr, msg_size,
@@ -777,28 +809,23 @@ class MailIndex(BaseIndex):
                 msg_mid = b36(msg_idx_pos)
 
             # Parse and index
-            (msg_ts, msg_to, msg_cc, msg_subj, msg_body, tags
-             ) = self._extract_info_and_index(session, mailbox_idx,
-                                              msg_mid, msg_id, msg_size,
-                                              msg, msg_metadata_kws,
-                                              default_date,
-                                              process_new=process_new,
-                                              apply_tags=apply_tags,
-                                              incoming=True)
+            (msg_info, tags
+             ) = self._extract_info_and_index(session, msg_idx_pos, msg_info,
+                                                mailbox_idx,
+                                                msg_mid, msg_id, msg_size,
+                                                msg, msg_metadata_kws,
+                                                default_date,
+                                                process_new=process_new,
+                                                apply_tags=apply_tags,
+                                                incoming=True)
 
-            # Finally, update the metadata index with whatever we learned
-            self.edit_msg_info(msg_info,
-                               msg_from=safe_decode_hdr(msg, 'from'),
-                               msg_ts=msg_ts,
-                               msg_to=msg_to,
-                               msg_cc=msg_cc,
-                               msg_subject=msg_subj,
-                               msg_body=msg_body,
-                               msg_size=msg_size,
-                               msg_tags=tags)
-            self.set_msg_at_idx_pos(msg_idx_pos, msg_info)
+            # Update of msg_info moved into _extract_info_and_index().
+            # As a result, the only item returned from that method
+            # that is used is msg_info.
 
         self.set_conversation_ids(msg_info[self.MSG_MID], msg)
+        # Note that the only item in the returned msg_info that is used
+        # by _real_scan_one() is the date.
         return msg_info
 
     def index_email(self, session, email):
@@ -814,22 +841,17 @@ class MailIndex(BaseIndex):
         mailbox_idx = msg_info[self.MSG_PTRS].split(',')[0][:MBX_ID_LEN]
         default_date = long(msg_info[self.MSG_DATE], 36)
 
-        (msg_ts, msg_to, msg_cc, msg_subj, msg_body, tags
-         ) = self._extract_info_and_index(session, mailbox_idx,
-                                          msg_mid, msg_id, msg_size,
-                                          msg, msg_metadata_kws,
-                                          default_date,
-                                          incoming=False)
-        self.edit_msg_info(msg_info,
-                           msg_ts=msg_ts,
-                           msg_from=safe_decode_hdr(msg, 'from'),
-                           msg_to=msg_to,
-                           msg_cc=msg_cc,
-                           msg_subject=msg_subj,
-                           msg_body=msg_body)
-
-        self.set_msg_at_idx_pos(email.msg_idx_pos, msg_info)
-
+        (msg_info, tags
+         ) = self._extract_info_and_index(session, email.msg_idx_pos, msg_info,
+                                            mailbox_idx,
+                                            msg_mid, msg_id, msg_size,
+                                            msg, msg_metadata_kws,
+                                            default_date,
+                                            incoming=False)
+        # Update of msg_info moved into _extract_info_and_index().
+        # As a result, the only items returned from that method
+        # that are used are msg_info and tags.
+        
         # Reset the internal tags on this message
         for tag_id in self.get_tags(msg_info=msg_info):
             tag = session.config.get_tag(tag_id)
@@ -1523,6 +1545,8 @@ class MailIndex(BaseIndex):
                       msg, msg_metadata_kws, msg_size, msg_ts,
                       mailbox=None, compact=True, filter_hooks=None,
                       process_new=None, apply_tags=None, incoming=False):
+        # Note that as of b58e4af 2019-10-15 index_message is called only
+        # from one place in Mailpile namely _extract_info_and_index().
         keywords, snippet = self.read_message(session,
                                               msg_mid, msg_id, msg,
                                               msg_size, msg_ts,
@@ -1549,6 +1573,11 @@ class MailIndex(BaseIndex):
             keywords.add('%x:u' % (msg_ts / (24 * 3600)))
 
         for hook in filter_hooks or []:
+            # Note that in some cases it would be useful for indexing 
+            # plugins to have access to the metadata extracted from the
+            # message being filtered and indexed, in addition to the
+            # keywords that are available here, but as of b58e4af
+            # 2019-10-15 the extracted metadata is not available here.
             keywords = hook(session, msg_mid, msg, keywords,
                             incoming=incoming)
 
